@@ -1,7 +1,7 @@
 import os
 import json
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 import modal
 from fastapi import Request
@@ -27,7 +27,7 @@ image = (
 app = modal.App(APP_NAME, image=image)
 snowflake_secret = modal.Secret.from_name("SNOWFLAKE")
 
-# Persistent storage for uploaded videos (optional but handy).
+# Persistent storage for uploaded media files (videos + images).
 vol = modal.Volume.from_name("ecotrack-videos", create_if_missing=True)
 VIDEO_DIR = "/data"
 DEFAULT_SEARCH_LIMIT = int(os.getenv("SNOWFLAKE_RAG_TOP_K", "5"))
@@ -36,6 +36,7 @@ DEFAULT_SEARCH_COLUMNS = ["content", "source_url", "doc_id", "chunk_id"]
 CAMERAS_TABLE = os.getenv("SNOWFLAKE_CAMERAS_TABLE", "CAMERAS")
 CAMERA_INFO_TABLE = os.getenv("SNOWFLAKE_CAMERA_INFO_TABLE", "CAMERA_INFO")
 RAG_DOCUMENTS_TABLE = os.getenv("SNOWFLAKE_RAG_TABLE", "RAG_DOCUMENTS")
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 
 
@@ -231,6 +232,55 @@ def _write_camera_info_record(conn, camera_id: Optional[int], out: Dict[str, Any
         )
 
 
+def _persist_detector_output(
+    out: Dict[str, Any],
+    camera_id: Optional[int],
+    lat: Optional[str],
+    lng: Optional[str],
+) -> str:
+    db_write_status = "skipped"
+    conn = None
+    try:
+        conn = _snowflake_connect()
+        parsed_lat = float(lat) if lat is not None and lat != "" else None
+        parsed_lng = float(lng) if lng is not None and lng != "" else None
+        resolved_camera_id = (
+            camera_id
+            if camera_id is not None
+            else _find_nearest_camera_id(conn, parsed_lat, parsed_lng)
+        )
+        _write_camera_info_record(conn, resolved_camera_id, out)
+        db_write_status = "ok" if resolved_camera_id is not None else "no_camera_id"
+    except Exception as exc:
+        db_write_status = f"error: {exc}"
+    finally:
+        if conn is not None:
+            conn.close()
+    return db_write_status
+
+
+def _image_suffix(filename: Optional[str]) -> str:
+    ext = os.path.splitext(filename or "")[1].lower()
+    if ext in IMAGE_EXTENSIONS:
+        return ext
+    return ".jpg"
+
+
+async def _save_upload_file(file: Any, suffix: str) -> Tuple[str, str]:
+    file_id = str(uuid.uuid4())
+    save_path = os.path.join(VIDEO_DIR, f"{file_id}{suffix}")
+
+    with open(save_path, "wb") as f:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
+
+    await vol.commit.aio()
+    return file_id, save_path
+
+
 def _complete_with_context(conn, question: str, contexts: List[Dict[str, Any]]) -> str:
     context_lines = []
     for i, item in enumerate(contexts, start=1):
@@ -379,6 +429,45 @@ class CounterService:
             "peak_vehicles_in_frame": int(peak_vehicles),
         }
 
+    @modal.method()
+    def count_image(self, image_path: str) -> Dict[str, Any]:
+        """
+        Runs YOLOv8 detection on a single image and returns:
+          - detected counts per class
+          - total detected vehicles
+        """
+        if not hasattr(self, "model"):
+            self._load_model()
+
+        # Ensure this container sees latest files committed by the uploader.
+        vol.reload()
+
+        from collections import Counter
+
+        results = self.model.predict(
+            source=image_path,
+            verbose=False,
+            conf=0.25,
+            iou=0.5,
+        )
+
+        counts_by_class = Counter()
+        for r in results:
+            if r.boxes is None:
+                continue
+            classes = r.boxes.cls.cpu().numpy().astype(int)
+            for c in classes:
+                name = self.names[int(c)]
+                if name in self.vehicle_classes:
+                    counts_by_class[name] += 1
+
+        total_detected = sum(counts_by_class.values())
+        return {
+            "counts_by_class": dict(counts_by_class),
+            "total_unique_vehicles": int(total_detected),
+            "peak_vehicles_in_frame": int(total_detected),
+        }
+
 
 @app.function(volumes={VIDEO_DIR: vol}, secrets=[snowflake_secret])
 @modal.fastapi_endpoint(method="POST")
@@ -405,40 +494,64 @@ async def upload_and_count(request: Request) -> Dict[str, Any]:
     camera_id = _parse_int(form.get("camera_id"))
 
     # Save to volume so the GPU method can read it
-    vid_id = str(uuid.uuid4())
-    save_path = os.path.join(VIDEO_DIR, f"{vid_id}.mp4")
-
-    # Stream upload to disk
-    with open(save_path, "wb") as f:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            f.write(chunk)
-
-    # Make sure volume persists
-    await vol.commit.aio()
+    vid_id, save_path = await _save_upload_file(file, ".mp4")
 
     # Run GPU inference
     svc = CounterService()
     out = await svc.count_video.remote.aio(save_path)
 
     # Persist detector output into Snowflake CAMERA_INFO when possible.
-    # Password is expected via Modal secret; other Snowflake config can come from env.
-    db_write_status = "skipped"
-    try:
-        conn = _snowflake_connect()
-        parsed_lat = float(lat) if lat is not None and lat != "" else None
-        parsed_lng = float(lng) if lng is not None and lng != "" else None
-        resolved_camera_id = camera_id or _find_nearest_camera_id(conn, parsed_lat, parsed_lng)
-        _write_camera_info_record(conn, resolved_camera_id, out)
-        db_write_status = "ok" if resolved_camera_id is not None else "no_camera_id"
-        conn.close()
-    except Exception as exc:
-        db_write_status = f"error: {exc}"
+    db_write_status = _persist_detector_output(out, camera_id, lat, lng)
 
     return {
         "video_id": vid_id,
+        "camera_id": camera_id,
+        "lat": lat,
+        "lng": lng,
+        "timestamp": timestamp,
+        "db_write_status": db_write_status,
+        **out,
+    }
+
+
+@app.function(volumes={VIDEO_DIR: vol}, secrets=[snowflake_secret])
+@modal.fastapi_endpoint(method="POST")
+async def upload_image_and_count(request: Request) -> Dict[str, Any]:
+    """
+    HTTP endpoint:
+      POST multipart/form-data with:
+        - file: image
+        - lat: float (optional)
+        - lng: float (optional)
+        - timestamp: string (optional)
+        - camera_id: int (optional)
+    Returns JSON counts + echoes metadata.
+    """
+    form = await request.form()
+    file = form.get("file")
+    if file is None:
+        return {"error": "Missing 'file' in form-data."}
+    if not hasattr(file, "read"):
+        return {"error": "Invalid 'file' in form-data."}
+
+    lat = form.get("lat")
+    lng = form.get("lng")
+    timestamp = form.get("timestamp")
+    camera_id = _parse_int(form.get("camera_id"))
+    suffix = _image_suffix(getattr(file, "filename", ""))
+
+    # Save to volume so the GPU method can read it
+    image_id, save_path = await _save_upload_file(file, suffix)
+
+    # Run GPU inference
+    svc = CounterService()
+    out = await svc.count_image.remote.aio(save_path)
+
+    # Persist detector output into Snowflake CAMERA_INFO when possible.
+    db_write_status = _persist_detector_output(out, camera_id, lat, lng)
+
+    return {
+        "image_id": image_id,
         "camera_id": camera_id,
         "lat": lat,
         "lng": lng,
