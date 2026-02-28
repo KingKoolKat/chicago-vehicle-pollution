@@ -1,3 +1,5 @@
+document.body.insertAdjacentHTML('afterbegin', createNavigation());
+
 // Language Switcher
 document.getElementById('languageSelect').addEventListener('change', (e) => {
     const lang = e.target.value;

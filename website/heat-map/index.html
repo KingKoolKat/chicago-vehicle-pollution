@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoTrack - Real-time Pollution Monitoring & Prediction</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="icon" href="image/favicon.png" type="image/x-icon">
+    <link rel="stylesheet" href="../css/styles.css">
+    <link rel="stylesheet" href="../css/mobile.css">
+</head>
+<body class="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900">
+    <!-- Heat Map Section -->
+    <section id="heatmap" class="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+        <div class="glass-panel rounded-3xl p-8 mb-8">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2" data-i18n="map.title">Emissions Heat Map</h2>
+                    <p class="text-gray-400" data-i18n="map.subtitle">Real-time traffic and pollution intensity visualization</p>
+                </div>
+                <div class="flex gap-3">
+                    <button onclick="toggleLayer('traffic')" class="px-4 py-2 rounded-lg bg-blue-500/20 border border-blue-500/50 hover:bg-blue-500/30 transition-all active" id="btn-traffic">
+                        <i class="fas fa-traffic-light mr-2"></i>Traffic
+                    </button>
+                    <button onclick="toggleLayer('emissions')" class="px-4 py-2 rounded-lg bg-green-500/20 border border-green-500/50 hover:bg-green-500/30 transition-all active" id="btn-emissions">
+                        <i class="fas fa-smog mr-2"></i>Emissions
+                    </button>
+                </div>
+            </div>
+            
+            <div class="relative">
+                <div id="map" class="shadow-2xl"></div>
+                
+                <!-- Map Controls Overlay -->
+                <div class="absolute top-4 right-4 z-[1000] glass-panel rounded-xl p-4 max-w-xs">
+                    <h4 class="font-semibold mb-3 text-sm" data-i18n="map.legend">Intensity Legend</h4>
+                    <div class="heatmap-legend mb-2"></div>
+                    <div class="flex justify-between text-xs text-gray-400">
+                        <span data-i18n="legend.low">Low</span>
+                        <span data-i18n="legend.high">Critical</span>
+                    </div>
+                    <div class="mt-4 space-y-2">
+                        <div class="flex items-center gap-2 text-xs">
+                            <div class="w-3 h-3 rounded-full bg-green-400"></div>
+                            <span data-i18n="legend.normal">&lt; 50 ppm Normal</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-xs">
+                            <div class="w-3 h-3 rounded-full bg-yellow-400"></div>
+                            <span data-i18n="legend.moderate">50-150 Moderate</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-xs">
+                            <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                            <span data-i18n="legend.severe">&gt; 150 Severe</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="glass-panel rounded-xl p-4 border-l-4 border-red-500">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400 text-sm" data-i18n="alerts.critical">Critical Zones</span>
+                        <span class="text-2xl font-bold text-red-400">3</span>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">Downtown, Industrial District, Harbor</p>
+                </div>
+                <div class="glass-panel rounded-xl p-4 border-l-4 border-yellow-500">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400 text-sm" data-i18n="alerts.moderate">Moderate Alerts</span>
+                        <span class="text-2xl font-bold text-yellow-400">7</span>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">Highway intersections, School zones</p>
+                </div>
+                <div class="glass-panel rounded-xl p-4 border-l-4 border-green-500">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400 text-sm" data-i18n="alerts.improving">Improving</span>
+                        <span class="text-2xl font-bold text-green-400">12</span>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">Residential areas, Parks</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Predictions Section -->
+    <section id="predictions" class="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+        <div class="glass-panel rounded-3xl p-8">
+            <h2 class="text-3xl font-bold mb-6" data-i18n="predict.title">Emission Predictions</h2>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Controls -->
+                <div class="space-y-6">
+                    <div class="glass-panel rounded-xl p-6">
+                        <label class="block text-sm font-medium mb-3" data-i18n="predict.time">Select Time Frame</label>
+                        <input type="range" min="0" max="23" value="12" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer slider-thumb" id="timeSlider" oninput="updatePrediction(this.value)">
+                        <div class="flex justify-between text-xs text-gray-400 mt-2">
+                            <span>00:00</span>
+                            <span>12:00</span>
+                            <span>23:00</span>
+                        </div>
+                        <div class="mt-4 text-center">
+                            <span class="text-2xl font-bold text-green-400" id="selectedTime">12:00</span>
+                            <span class="text-gray-400 ml-2" data-i18n="predict.selected">Selected</span>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-panel rounded-xl p-6">
+                        <label class="block text-sm font-medium mb-3" data-i18n="predict.location">Location Analysis</label>
+                        <select id="locationSelect" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 mb-4 focus:outline-none focus:border-green-400" onchange="updateLocationTrend()">
+                            <option value="downtown">Downtown Core</option>
+                            <option value="highway">Highway I-95</option>
+                            <option value="industrial">Industrial Zone</option>
+                            <option value="residential">Residential North</option>
+                            <option value="harbor">Port Harbor</option>
+                        </select>
+                        <button onclick="runPrediction()" class="w-full py-3 bg-gradient-to-r from-green-500 to-blue-600 rounded-lg font-semibold hover:shadow-lg transition-all">
+                            <i class="fas fa-calculator mr-2"></i>
+                            <span data-i18n="predict.calculate">Calculate Prediction</span>
+                        </button>
+                    </div>
+                    
+                    <div class="glass-panel rounded-xl p-6 border border-yellow-500/30">
+                        <h4 class="font-semibold mb-2 text-yellow-400"><i class="fas fa-lightbulb mr-2"></i><span data-i18n="predict.insight">AI Insight</span></h4>
+                        <p class="text-sm text-gray-300" id="aiInsight" data-i18n="predict.insightText">
+                            Peak emissions expected at 18:00 due to rush hour traffic. Recommend alternative routing.
+                        </p>
+                    </div>
+                </div>
+                
+                <!-- Chart -->
+                <div class="lg:col-span-2 glass-panel rounded-xl p-6 h-[400px]">
+                    <canvas id="predictionChart" width="400" height="200"></canvas>
+                    <div class="mt-4 grid grid-cols-3 gap-4 text-center">
+                        <div class="p-3 rounded-lg bg-gray-800/50">
+                            <div class="text-xs text-gray-400" data-i18n="stats.current">Current</div>
+                            <div class="text-xl font-bold text-white" id="currentVal">145 ppm</div>
+                        </div>
+                        <div class="p-3 rounded-lg bg-gray-800/50">
+                            <div class="text-xs text-gray-400" data-i18n="stats.predicted">Predicted</div>
+                            <div class="text-xl font-bold text-yellow-400" id="predictedVal">189 ppm</div>
+                        </div>
+                        <div class="p-3 rounded-lg bg-gray-800/50">
+                            <div class="text-xs text-gray-400" data-i18n="stats.change">Change</div>
+                            <div class="text-xl font-bold text-red-400" id="changeVal">+30%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <script src="../js/translation.js"></script>
+    <script src="../js/components.js"></script>
+    <script src="../js/main.js"></script>
+</body>
+</html>

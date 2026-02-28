@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoTrack - Real-time Pollution Monitoring & Prediction</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="icon" href="image/favicon.png" type="image/x-icon">
+    <link rel="stylesheet" href="../css/styles.css">
+    <link rel="stylesheet" href="../css/mobile.css">
+</head>
+<body class="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900">
+    <!-- Video Upload Section -->
+    <section id="upload" class="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+        <div class="glass-panel rounded-3xl p-8">
+            <h2 class="text-3xl font-bold mb-2" data-i18n="upload.title">Contribute Data</h2>
+            <p class="text-gray-400 mb-8" data-i18n="upload.subtitle">Upload road footage to train our AI and improve predictions</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <!-- Upload Area -->
+                <div class="space-y-6">
+                    <div class="border-2 border-dashed border-gray-600 rounded-2xl p-8 text-center hover:border-green-400 transition-colors cursor-pointer relative overflow-hidden" onclick="document.getElementById('videoInput').click()" id="dropZone">
+                        <input type="file" id="videoInput" accept="video/*" class="hidden" onchange="handleVideoUpload(event)">
+                        <div class="mb-4">
+                            <i class="fas fa-cloud-upload-alt text-5xl text-gray-400"></i>
+                        </div>
+                        <h3 class="text-lg font-semibold mb-2" data-i18n="upload.drop">Drop video here or click to upload</h3>
+                        <p class="text-sm text-gray-500" data-i18n="upload.formats">Supports MP4, MOV, AVI (Max 500MB)</p>
+                        
+                        <div id="uploadProgress" class="hidden mt-4">
+                            <div class="w-full bg-gray-700 rounded-full h-2 mb-2">
+                                <div class="bg-green-400 h-2 rounded-full transition-all duration-300" style="width: 0%" id="progressBar"></div>
+                            </div>
+                            <p class="text-sm text-green-400" id="uploadStatus">Uploading...</p>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-panel rounded-xl p-6">
+                        <h4 class="font-semibold mb-4"><i class="fas fa-camera mr-2 text-blue-400"></i><span data-i18n="upload.live">Live Camera</span></h4>
+                        <div class="video-preview rounded-lg h-48 flex items-center justify-center relative overflow-hidden" id="cameraPreview">
+                            <div class="text-center">
+                                <i class="fas fa-video text-4xl text-gray-600 mb-2"></i>
+                                <p class="text-sm text-gray-500" data-i18n="upload.cameraText">Camera access required</p>
+                            </div>
+                            <video id="liveVideo" class="absolute inset-0 w-full h-full object-cover hidden" autoplay></video>
+                            <canvas id="analysisCanvas" class="absolute inset-0 w-full h-full hidden"></canvas>
+                        </div>
+                        <div class="flex gap-3 mt-4">
+                            <button onclick="startCamera()" class="flex-1 py-2 bg-blue-500/20 border border-blue-500 rounded-lg hover:bg-blue-500/30 transition-all text-sm">
+                                <i class="fas fa-play mr-2"></i><span data-i18n="upload.start">Start</span>
+                            </button>
+                            <button onclick="stopCamera()" class="flex-1 py-2 bg-red-500/20 border border-red-500 rounded-lg hover:bg-red-500/30 transition-all text-sm">
+                                <i class="fas fa-stop mr-2"></i><span data-i18n="upload.stop">Stop</span>
+                            </button>
+                            <button onclick="captureFrame()" class="flex-1 py-2 bg-green-500/20 border border-green-500 rounded-lg hover:bg-green-500/30 transition-all text-sm">
+                                <i class="fas fa-camera mr-2"></i><span data-i18n="upload.capture">Capture</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Analysis Results -->
+                <div class="space-y-6">
+                    <div class="glass-panel rounded-xl p-6 h-full">
+                        <h4 class="font-semibold mb-4"><i class="fas fa-chart-bar mr-2 text-green-400"></i><span data-i18n="upload.analysis">Real-time Analysis</span></h4>
+                        
+                        <div id="analysisResults" class="space-y-4">
+                            <div class="text-center text-gray-500 py-12">
+                                <i class="fas fa-robot text-4xl mb-3"></i>
+                                <p data-i18n="upload.waiting">Waiting for video input...</p>
+                            </div>
+                        </div>
+                        
+                        <div id="activeAnalysis" class="hidden space-y-4">
+                            <div class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+                                <span class="text-sm text-gray-400">Vehicles Detected</span>
+                                <span class="text-xl font-bold text-green-400" id="vehicleCount">0</span>
+                            </div>
+                            <div class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+                                <span class="text-sm text-gray-400">Trucks/Heavy</span>
+                                <span class="text-xl font-bold text-yellow-400" id="truckDetected">0</span>
+                            </div>
+                            <div class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+                                <span class="text-sm text-gray-400">Est. Emissions</span>
+                                <span class="text-xl font-bold text-red-400" id="liveEmissions">0 kg/h</span>
+                            </div>
+                            <div class="p-3 bg-blue-900/30 border border-blue-500/30 rounded-lg">
+                                <div class="text-xs text-blue-400 mb-1">LOCATION</div>
+                                <div class="text-sm font-mono" id="gpsCoords">--°--'--" N, --°--'--" E</div>
+                            </div>
+                            <div class="p-3 bg-purple-900/30 border border-purple-500/30 rounded-lg">
+                                <div class="text-xs text-purple-400 mb-1">TIMESTAMP</div>
+                                <div class="text-sm font-mono" id="timestamp">--:--:--</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <script src="../js/translation.js"></script>
+    <script src="../js/components.js"></script>
+    <script src="../js/main.js"></script>
+</body>
+</html>
