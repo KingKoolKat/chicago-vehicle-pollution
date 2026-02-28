@@ -77,8 +77,7 @@ async function injectSectionsOnHomePage() {
     const sectionTargets = [
         { url: 'emissions/index.html', selector: '#heatmap', targetId: 'mapSection' },
         { url: 'emissions/index.html', selector: '#predictions', targetId: 'chartSection' },
-        { url: 'upload/index.html', selector: '#upload', targetId: 'cameraSection' },
-        { url: 'chatbot/index.html', selector: '#chat', targetId: 'cameraSection' }
+        { url: 'chatbot/index.html', selector: '#chat', targetId: 'chatSection' }
     ];
 
     const parser = new DOMParser();
@@ -121,7 +120,8 @@ function initMap() {
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
         subdomains: 'abcd',
-        maxZoom: 19
+        maxZoom: 19,
+        minZoom: 5
     }).addTo(map);
     
     // Add simulated heat map data points

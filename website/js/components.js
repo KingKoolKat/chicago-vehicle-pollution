@@ -9,13 +9,13 @@ function createNavigation() {
     const currentUser = window.Auth ? window.Auth.getSessionUser() : null;
     const initials = currentUser ? window.Auth.getInitials(currentUser.name, currentUser.email) : "";
     const uploadAction = isHomePage
-        ? 'onclick="scrollToSection(\'upload\')" href="javascript:void(0)"'
+        ? 'onclick="window.location.href=\'/upload\'" href="javascript:void(0)"'
         : `href="${uploadLink}"`;
 
     const authControls = currentUser
         ? `
             <div class="relative" id="userMenuContainer">
-                <button id="userMenuTrigger" type="button" class="flex items-center gap-2 px-2 py-1 rounded-lg border border-green-400/30 bg-gray-900/50 hover:bg-gray-800/70 transition-all">
+                <button id="userMenuTrigger" type="button" class="flex items-center gap-2 px-2 py-1 rounded-lg border border-green-400/30 bg-blue-200/50 hover:bg-blue-300/70 transition-all">
                     <span class="w-8 h-8 rounded-full bg-gradient-to-r from-green-500 to-blue-600 flex items-center justify-center text-xs font-bold">${initials}</span>
                     <span class="hidden sm:inline text-sm max-w-28 truncate">${currentUser.name || currentUser.email}</span>
                     <i class="fas fa-chevron-down text-xs"></i>
@@ -48,8 +48,7 @@ function createNavigation() {
 
                 <div class="flex items-center gap-2 sm:gap-4 md:gap-6 ml-auto text-xs sm:text-sm whitespace-nowrap">
                     <a href="${dashboardLink}" ${isHomePage ? 'onclick="scrollToSection(\'top\')"' : ''} class="hover:text-green-400 px-2 sm:px-3 py-2 font-medium" data-i18n="nav.dashboard">Dashboard</a>
-                    <a href="${emissionsLink}" ${isHomePage ? 'onclick="scrollToSection(\'heatmap\')"' : ''} class="hover:text-green-400 px-2 sm:px-3 py-2 font-medium" data-i18n="nav.heatmap">Emissions</a>
-                    <a href="${uploadLink}" ${isHomePage ? 'onclick="scrollToSection(\'upload\')"' : ''} class="hover:text-green-400 px-2 sm:px-3 py-2 font-medium" data-i18n="nav.upload">Upload Data</a>
+                    <a href="${emissionsLink}" ${isHomePage ? 'onclick="scrollToSection(\'heatmap\')"' : ''} class="hover:text-green-400 px-2 sm:px-3 py-2 font-medium" data-i18n="nav.heatmap">Heat Map</a>
                     <a href="${chatLink}" ${isHomePage ? 'onclick="scrollToSection(\'chat\')"' : ''} class="hover:text-green-400 px-2 sm:px-3 py-2 font-medium" data-i18n="nav.chat">AI Assistant</a>
 
                     <!-- Language Selector inside nav -->

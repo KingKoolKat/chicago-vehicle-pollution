@@ -40,7 +40,7 @@
             
             <div class="flex gap-3">
                 <input type="text" id="chatInput" placeholder="Ask about emissions, traffic, or predictions..." 
-                    class="flex-1 bg-gray-800 border border-gray-600 rounded-xl px-4 py-3 focus:outline-none focus:border-green-400 transition-colors"
+                    class="flex-1 chat-input-fresh rounded-xl px-4 py-3 transition-colors"
                     onkeypress="if(event.key==='Enter') sendMessage()">
                 <button onclick="sendMessage()" class="px-6 py-3 bg-gradient-to-r from-green-500 to-blue-600 rounded-xl hover:shadow-lg transition-all">
                     <i class="fas fa-paper-plane"></i>
@@ -48,10 +48,10 @@
             </div>
             
             <div class="flex gap-2 mt-4 flex-wrap">
-                <button onclick="quickAsk('What are current emission levels?')" class="text-xs px-3 py-1 rounded-full bg-gray-800 hover:bg-gray-700 transition-colors border border-gray-600" data-i18n="chat.quick1">Current levels?</button>
-                <button onclick="quickAsk('Show me rush hour predictions')" class="text-xs px-3 py-1 rounded-full bg-gray-800 hover:bg-gray-700 transition-colors border border-gray-600" data-i18n="chat.quick2">Rush hour?</button>
-                <button onclick="quickAsk('Which areas are most polluted?')" class="text-xs px-3 py-1 rounded-full bg-gray-800 hover:bg-gray-700 transition-colors border border-gray-600" data-i18n="chat.quick3">Worst areas?</button>
-                <button onclick="quickAsk('How can I reduce my carbon footprint?')" class="text-xs px-3 py-1 rounded-full bg-gray-800 hover:bg-gray-700 transition-colors border border-gray-600" data-i18n="chat.quick4">Reduce emissions?</button>
+                <button onclick="quickAsk('What are current emission levels?')" class="text-xs px-3 py-1 rounded-full bg-white/10 hover:bg-gray-300 transition-colors border border-gray-500 text-black" data-i18n="chat.quick1">Current levels?</button>
+                <button onclick="quickAsk('Show me rush hour predictions')" class="text-xs px-3 py-1 rounded-full bg-white/10 hover:bg-gray-300 transition-colors border border-gray-500 text-black" data-i18n="chat.quick2">Rush hour?</button>
+                <button onclick="quickAsk('Which areas are most polluted?')" class="text-xs px-3 py-1 rounded-full bg-white/10 hover:bg-gray-300 transition-colors border border-gray-500 text-black" data-i18n="chat.quick3">Worst areas?</button>
+                <button onclick="quickAsk('How can I reduce my carbon footprint?')" class="text-xs px-3 py-1 rounded-full bg-white/10 hover:bg-gray-300 transition-colors border border-gray-500 text-black" data-i18n="chat.quick4">Reduce emissions?</button>
             </div>
         </div>
     </section>
