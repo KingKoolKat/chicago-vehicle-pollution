@@ -1,4 +1,5 @@
 document.body.insertAdjacentHTML('afterbegin', createNavigation());
+const CHAT_API_URL = window.CHAT_API_URL || '/chat';
 
 // Language Switcher
 document.getElementById('languageSelect').addEventListener('change', (e) => {
@@ -322,8 +323,10 @@ function handleVideoUpload(event) {
 }
 
 // Chat functionality
-function sendMessage() {
+async function sendMessage() {
     const input = document.getElementById('chatInput');
+    if (!input) return;
+
     const message = input.value.trim();
     if (!message) return;
     
@@ -333,12 +336,22 @@ function sendMessage() {
     // Show typing indicator
     showTyping();
     
-    // Simulate AI response
-    setTimeout(() => {
+    try {
+        const response = await fetchRagResponse(message);
         removeTyping();
-        const response = generateAIResponse(message);
-        addMessage(response, 'bot');
-    }, 1500 + Math.random() * 1000);
+        addMessage(response.answer || "I don't have enough context to answer that.", 'bot');
+
+        if (response.citations && response.citations.length > 0) {
+            const refs = response.citations
+                .slice(0, 3)
+                .map((c) => c.source_url || `${c.doc_id || 'doc'}:${c.chunk_id || 'chunk'}`);
+            addMessage(`Sources: ${refs.join(' | ')}`, 'bot');
+        }
+    } catch (err) {
+        removeTyping();
+        const fallback = generateAIResponse(message);
+        addMessage(fallback, 'bot');
+    }
 }
 
 function quickAsk(question) {
@@ -388,6 +401,26 @@ function removeTyping() {
     if (indicator) indicator.remove();
 }
 
+async function fetchRagResponse(question) {
+    const res = await fetch(CHAT_API_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ question })
+    });
+
+    if (!res.ok) {
+        throw new Error(`Chat request failed with status ${res.status}`);
+    }
+
+    const data = await res.json();
+    if (data.error) {
+        throw new Error(data.error);
+    }
+    return data;
+}
+
 function generateAIResponse(input) {
     const lower = input.toLowerCase();
     
@@ -419,36 +452,45 @@ function scrollToSection(id) {
 
 // Initialize
 window.onload = function() {
-    initMap();
-    initChart();
-    updatePrediction(12);
+    if (document.getElementById('map')) initMap();
+    if (document.getElementById('predictionChart')) {
+        initChart();
+        updatePrediction(12);
+    }
     
     // Simulate live stats updates
-    setInterval(() => {
-        document.getElementById('activeSensors').textContent = Math.floor(1200 + Math.random() * 100);
-        document.getElementById('co2Level').textContent = (2.3 + Math.random() * 0.3).toFixed(1) + 'k';
-        document.getElementById('truckCount').textContent = Math.floor(850 + Math.random() * 100);
-    }, 5000);
+    if (document.getElementById('activeSensors') && document.getElementById('co2Level') && document.getElementById('truckCount')) {
+        setInterval(() => {
+            document.getElementById('activeSensors').textContent = Math.floor(1200 + Math.random() * 100);
+            document.getElementById('co2Level').textContent = (2.3 + Math.random() * 0.3).toFixed(1) + 'k';
+            document.getElementById('truckCount').textContent = Math.floor(850 + Math.random() * 100);
+        }, 5000);
+    }
 };
 
 // Drag and drop for video
 const dropZone = document.getElementById('dropZone');
 
-dropZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropZone.classList.add('border-green-400', 'bg-green-400/10');
-});
+if (dropZone) {
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('border-green-400', 'bg-green-400/10');
+    });
 
-dropZone.addEventListener('dragleave', () => {
-    dropZone.classList.remove('border-green-400', 'bg-green-400/10');
-});
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('border-green-400', 'bg-green-400/10');
+    });
 
-dropZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropZone.classList.remove('border-green-400', 'bg-green-400/10');
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-        document.getElementById('videoInput').files = files;
-        handleVideoUpload({ target: { files: files } });
-    }
-});
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('border-green-400', 'bg-green-400/10');
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            const videoInput = document.getElementById('videoInput');
+            if (videoInput) {
+                videoInput.files = files;
+            }
+            handleVideoUpload({ target: { files: files } });
+        }
+    });
+}
