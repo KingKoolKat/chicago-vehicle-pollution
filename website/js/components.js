@@ -3,7 +3,7 @@ function createNavigation() {
     const isSubPage = !isHomePage;
     const dashboardLink = isHomePage ? "javascript:void(0)" : "../?section=top";
     const emissionsLink = isHomePage ? "javascript:void(0)" : "../?section=heatmap";
-    const uploadLink = isHomePage ? "upload/" : "../upload/";
+    const uploadLink = "../upload/";
     const chatLink = isHomePage ? "javascript:void(0)" : "../?section=chat";
     const loginLink = isSubPage ? "../login/" : "login/";
     const currentUser = window.Auth ? window.Auth.getSessionUser() : null;
@@ -16,7 +16,7 @@ function createNavigation() {
         ? `
             <div class="relative" id="userMenuContainer">
                 <button id="userMenuTrigger" type="button" class="flex items-center gap-2 px-2 py-1 rounded-lg border border-green-400/30 bg-blue-200/50 hover:bg-blue-300/70 transition-all">
-                    <span class="w-8 h-8 rounded-full bg-gradient-to-r from-green-500 to-blue-600 flex items-center justify-center text-xs font-bold">${initials}</span>
+                    <span class="w-8 h-8 rounded-full bg-green-300 flex items-center justify-center text-xs font-bold">${initials}</span>
                     <span class="hidden sm:inline text-sm max-w-28 truncate">${currentUser.name || currentUser.email}</span>
                     <i class="fas fa-chevron-down text-xs"></i>
                 </button>
@@ -30,7 +30,7 @@ function createNavigation() {
                 </div>
             </div>
         `
-        : `<a href="${loginLink}" class="px-3 py-1 rounded-lg bg-gradient-to-r from-green-500 to-blue-600 font-semibold hover:shadow-lg transition-all" data-i18n="nav.login">Login</a>`;
+        : `<a href="${loginLink}" class="px-3 py-1 rounded-lg bg-green-300 font-semibold hover:shadow-lg transition-all" data-i18n="nav.login">Login</a>`;
 
     return `
     <nav class="fixed w-full z-50 glass-panel">
