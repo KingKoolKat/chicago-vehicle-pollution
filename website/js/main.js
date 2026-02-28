@@ -1,22 +1,122 @@
 document.body.insertAdjacentHTML('afterbegin', createNavigation());
 const CHAT_API_URL = window.CHAT_API_URL || '/chat';
+const isHomePage = window.location.pathname === '/' || window.location.pathname.endsWith('/index.html');
+let sectionsReadyPromise = Promise.resolve();
+let userLocation = null;
 
-// Language Switcher
-document.getElementById('languageSelect').addEventListener('change', (e) => {
-    const lang = e.target.value;
+function initUserMenu() {
+    const trigger = document.getElementById('userMenuTrigger');
+    const dropdown = document.getElementById('userMenuDropdown');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const container = document.getElementById('userMenuContainer');
+
+    if (!trigger || !dropdown || !container) return;
+    if (trigger.dataset.bound === 'true') return;
+    trigger.dataset.bound = 'true';
+
+    trigger.addEventListener('click', (event) => {
+        event.stopPropagation();
+        dropdown.classList.toggle('hidden');
+    });
+
+    document.addEventListener('click', (event) => {
+        if (!container.contains(event.target)) {
+            dropdown.classList.add('hidden');
+        }
+    });
+
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', () => {
+            if (window.Auth) {
+                window.Auth.logout();
+            }
+            window.location.href = isHomePage ? window.location.pathname : '../';
+        });
+    }
+}
+
+initUserMenu();
+
+function applyTranslations(lang) {
     document.querySelectorAll('[data-i18n]').forEach(el => {
         const key = el.getAttribute('data-i18n');
         if (translations[lang] && translations[lang][key]) {
             el.textContent = translations[lang][key];
         }
     });
+}
+
+// Language Switcher
+document.getElementById('languageSelect').addEventListener('change', (e) => {
+    applyTranslations(e.target.value);
 });
+
+function waitForElementById(id, retries = 30, delayMs = 100) {
+    return new Promise((resolve) => {
+        const existing = document.getElementById(id);
+        if (existing) {
+            resolve(existing);
+            return;
+        }
+
+        let attempts = 0;
+        const timer = setInterval(() => {
+            const node = document.getElementById(id);
+            if (node || attempts >= retries) {
+                clearInterval(timer);
+                resolve(node || null);
+            }
+            attempts += 1;
+        }, delayMs);
+    });
+}
+
+async function injectSectionsOnHomePage() {
+    if (!isHomePage) return;
+
+    const sectionTargets = [
+        { url: 'emissions/index.html', selector: '#heatmap', targetId: 'mapSection' },
+        { url: 'emissions/index.html', selector: '#predictions', targetId: 'chartSection' },
+        { url: 'upload/index.html', selector: '#upload', targetId: 'cameraSection' },
+        { url: 'chatbot/index.html', selector: '#chat', targetId: 'cameraSection' }
+    ];
+
+    const parser = new DOMParser();
+
+    for (const section of sectionTargets) {
+        const target = document.getElementById(section.targetId);
+        if (!target) continue;
+
+        try {
+            const response = await fetch(section.url);
+            if (!response.ok) continue;
+
+            const html = await response.text();
+            const doc = parser.parseFromString(html, 'text/html');
+            const sourceSection = doc.querySelector(section.selector);
+            if (sourceSection) {
+                target.insertAdjacentHTML('beforeend', sourceSection.outerHTML);
+            }
+        } catch (error) {
+            console.error(`Failed to inject ${section.url} (${section.selector})`, error);
+        }
+    }
+}
+
+async function scrollToSection(id) {
+    await sectionsReadyPromise;
+    const target = await waitForElementById(id);
+    if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
 
 // Initialize Map
 let map, heatLayer, markers = [];
+let pulseMarkers = [];
 
 function initMap() {
-    map = L.map('map').setView([40.7128, -74.0060], 12);
+    map = L.map('map').setView([41.8781, -87.6298], 12);
     
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
@@ -26,14 +126,14 @@ function initMap() {
     
     // Add simulated heat map data points
     const heatPoints = [
-        [40.7128, -74.0060, 0.9], // Downtown - high
-        [40.7580, -73.9855, 0.8], // Midtown - high
-        [40.6782, -73.9442, 0.6], // Brooklyn - medium
-        [40.7282, -73.7949, 0.4], // Queens - low
-        [40.8176, -73.9782, 0.7], // Industrial - high
-        [40.7489, -74.0324, 0.5], // Harbor - medium
-        [40.6892, -74.0445, 0.3], // Residential - low
-        [40.7614, -73.9776, 0.85], // Commercial - high
+        [41.8781, -87.6298, 0.9],  // Loop - high
+        [41.8917, -87.6078, 0.8],  // Near North - high
+        [41.8240, -87.6324, 0.6],  // Near South - medium
+        [41.9668, -87.6887, 0.4],  // North Side - low
+        [41.7520, -87.6120, 0.7],  // Industrial corridor - high
+        [41.8400, -87.6500, 0.5],  // South Loop edge - medium
+        [41.9800, -87.7200, 0.3],  // Residential northwest - low
+        [41.8850, -87.7000, 0.85], // West corridor - high
     ];
     
     // Create custom markers with pulsing effect for critical areas
@@ -41,23 +141,48 @@ function initMap() {
         const intensity = point[2];
         let color = intensity > 0.7 ? '#ff3366' : intensity > 0.4 ? '#ffaa00' : '#00ff88';
         
-        const marker = L.circleMarker([point[0], point[1]], {
-            radius: 20 + (intensity * 30),
+        const baseRadius = 400; // meters
+        const circleRadius = baseRadius * (1 + intensity * 2);
+        const marker = L.circle([point[0], point[1]], {
+            radius: circleRadius,
             fillColor: color,
             color: color,
-            weight: 2,
-            opacity: 0.3,
-            fillOpacity: 0.2
+            weight: 1,
+            opacity: 0.4,
+            fillOpacity: 0.25
         }).addTo(map);
         
         // Add pulsing effect for high intensity
         if (intensity > 0.7) {
+            const initialRadius = circleRadius / 24 / 12 * map.getZoom();
+
             const pulseIcon = L.divIcon({
                 className: 'pulse-marker',
-                html: `<div class="pulse-ring" style="border: 2px solid ${color}; width: 40px; height: 40px; border-radius: 50%; position: absolute; top: -20px; left: -20px;"></div>`,
+                html: `
+                    <div class="pulse-ring"
+                        style="
+                            border: 2px solid ${color};
+                            width: ${initialRadius}px;
+                            height: ${initialRadius}px;
+                            border-radius: 50%;
+                            position: absolute;
+                            top: -${initialRadius / 2}px;
+                            left: -${initialRadius / 2}px;">
+                    </div>
+                `,
                 iconSize: [0, 0]
             });
-            L.marker([point[0], point[1]], {icon: pulseIcon}).addTo(map);
+
+            const pulseMarker = L.marker([point[0], point[1]], { icon: pulseIcon }).addTo(map);
+
+            pulseMarkers.push({
+                marker: pulseMarker,
+                circleRadius: circleRadius,
+                color: color,
+                lat: point[0],
+                lng: point[1],
+                baseZoom: map.getZoom()
+            });
         }
         
         marker.bindPopup(`
@@ -71,11 +196,32 @@ function initMap() {
         
         markers.push(marker);
     });
+
+    map.on('zoom', updatePulseMarkers);
+}
+
+function updatePulseMarkers() {
+    const currentZoom = map.getZoom();
+
+    pulseMarkers.forEach(p => {
+        const scale = map.getZoomScale(currentZoom, p.baseZoom);
+        const newRadius = p.circleRadius / 24 * scale;
+
+        const el = p.marker.getElement();
+        if (!el) return;
+
+        const ring = el.querySelector('.pulse-ring');
+        if (!ring) return;
+
+        ring.style.width = `${newRadius}px`;
+        ring.style.height = `${newRadius}px`;
+        ring.style.top = `-${newRadius / 2}px`;
+        ring.style.left = `-${newRadius / 2}px`;
+    });
 }
 
 function zoomToZone(lat, lng) {
     map.setView([lat, lng], 16);
-    updateLocationFromCoords(lat, lng);
 }
 
 function toggleLayer(type) {
@@ -283,12 +429,48 @@ function simulateDetection() {
     document.getElementById('truckDetected').textContent = trucks;
     document.getElementById('liveEmissions').textContent = `${emissions} kg/h`;
     
-    // Update GPS (simulated)
-    const lat = (40.7128 + (Math.random() - 0.5) * 0.1).toFixed(4);
-    const lng = (-74.0060 + (Math.random() - 0.5) * 0.1).toFixed(4);
-    document.getElementById('gpsCoords').textContent = `${lat}°N, ${lng}°W`;
-    
-    document.getElementById('timestamp').textContent = new Date().toLocaleTimeString();
+    function updateUI() {
+        if (userLocation) {
+            const latDir = userLocation.lat >= 0 ? 'N' : 'S';
+            const lngDir = userLocation.lng >= 0 ? 'E' : 'W';
+
+            document.getElementById('gpsCoords').textContent =
+                `${Math.abs(userLocation.lat).toFixed(5)}°${latDir}, 
+                ${Math.abs(userLocation.lng).toFixed(5)}°${lngDir}`;
+        } else {
+            document.getElementById('gpsCoords').textContent = "Location unavailable";
+        }
+
+        document.getElementById('timestamp').textContent = new Date().toLocaleTimeString();
+    }
+
+    fetchUserLocation(updateUI);
+}
+
+function fetchUserLocation(callback) {
+    if (!navigator.geolocation) {
+        console.warn("Geolocation not supported.");
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            userLocation = {
+                lat: position.coords.latitude,
+                lng: position.coords.longitude
+            };
+
+            if (callback) callback();
+        },
+        (error) => {
+            console.error("Location error:", error);
+        },
+        {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0
+        }
+    );
 }
 
 function handleVideoUpload(event) {
@@ -409,11 +591,9 @@ async function fetchRagResponse(question) {
         },
         body: JSON.stringify({ question })
     });
-
     if (!res.ok) {
         throw new Error(`Chat request failed with status ${res.status}`);
     }
-
     const data = await res.json();
     if (data.error) {
         throw new Error(data.error);
@@ -428,7 +608,7 @@ function generateAIResponse(input) {
         return "Current emission levels are moderate at 145 ppm across the monitored area. Downtown shows the highest concentration at 210 ppm due to heavy traffic congestion. I recommend avoiding the central business district for the next 2 hours.";
     }
     if (lower.includes('rush') || lower.includes('hour') || lower.includes('peak')) {
-        return "Based on historical data and current traffic patterns, we expect peak emissions between 17:30-19:00 today. The Highway I-95 corridor will likely exceed 300 ppm during this period. Alternative routes through residential zones show 40% lower emission levels.";
+        return "Based on historical data and current traffic patterns, we expect peak emissions between 17:30-19:00 today. The I-90/I-94 corridor will likely exceed 300 ppm during this period. Alternative routes through residential zones show 40% lower emission levels.";
     }
     if (lower.includes('worst') || lower.includes('polluted') || lower.includes('area')) {
         return "The top 3 most polluted zones right now are: 1) Industrial District (245 ppm) - factory emissions, 2) Downtown Core (210 ppm) - traffic congestion, 3) Port Harbor (195 ppm) - shipping activity. These areas exceed WHO recommended limits by 2-3x.";
@@ -437,7 +617,7 @@ function generateAIResponse(input) {
         return "Here are personalized recommendations: 1) Use public transit during peak hours (7-9 AM, 5-7 PM) to reduce exposure by 60%, 2) Consider cycling routes through parks - our data shows 80% lower pollution levels, 3) If driving is necessary, use recirculated air mode in high-traffic zones, 4) Contribute footage via our upload feature to help map cleaner routes.";
     }
     if (lower.includes('truck') || lower.includes('heavy')) {
-        return "Heavy vehicles contribute disproportionately to emissions - approximately 40% of total pollution despite being only 10% of traffic. Our regression model estimates each truck produces 8x the emissions of a passenger car. Current truck density is highest on Highway I-95 (892 vehicles/hour).";
+        return "Heavy vehicles contribute disproportionately to emissions - approximately 40% of total pollution despite being only 10% of traffic. Our regression model estimates each truck produces 8x the emissions of a passenger car. Current truck density is highest on the I-90/I-94 corridor (892 vehicles/hour).";
     }
     if (lower.includes('prediction') || lower.includes('tomorrow') || lower.includes('forecast')) {
         return "Tomorrow's forecast shows similar patterns with a high probability of elevated emissions during morning rush (7-9 AM). Weather conditions suggest moderate dispersion, so levels may remain 15-20% higher than today. I recommend planning outdoor activities after 10 AM.";
@@ -446,32 +626,10 @@ function generateAIResponse(input) {
     return "I can help you analyze emission trends, predict pollution levels, identify high-traffic zones, or suggest cleaner routes. I can also process your uploaded videos to detect vehicle types and estimate their environmental impact. What specific data would you like to explore?";
 }
 
-function scrollToSection(id) {
-    document.getElementById(id).scrollIntoView({ behavior: 'smooth' });
-}
+function setupDropZoneHandlers() {
+    const dropZone = document.getElementById('dropZone');
+    if (!dropZone) return;
 
-// Initialize
-window.onload = function() {
-    if (document.getElementById('map')) initMap();
-    if (document.getElementById('predictionChart')) {
-        initChart();
-        updatePrediction(12);
-    }
-    
-    // Simulate live stats updates
-    if (document.getElementById('activeSensors') && document.getElementById('co2Level') && document.getElementById('truckCount')) {
-        setInterval(() => {
-            document.getElementById('activeSensors').textContent = Math.floor(1200 + Math.random() * 100);
-            document.getElementById('co2Level').textContent = (2.3 + Math.random() * 0.3).toFixed(1) + 'k';
-            document.getElementById('truckCount').textContent = Math.floor(850 + Math.random() * 100);
-        }, 5000);
-    }
-};
-
-// Drag and drop for video
-const dropZone = document.getElementById('dropZone');
-
-if (dropZone) {
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
         dropZone.classList.add('border-green-400', 'bg-green-400/10');
@@ -486,11 +644,41 @@ if (dropZone) {
         dropZone.classList.remove('border-green-400', 'bg-green-400/10');
         const files = e.dataTransfer.files;
         if (files.length > 0) {
-            const videoInput = document.getElementById('videoInput');
-            if (videoInput) {
-                videoInput.files = files;
-            }
+            document.getElementById('videoInput').files = files;
             handleVideoUpload({ target: { files: files } });
         }
     });
 }
+
+// Initialize
+window.onload = async function() {
+    sectionsReadyPromise = injectSectionsOnHomePage();
+    await sectionsReadyPromise;
+    initUserMenu();
+
+    if (document.getElementById('map')) {
+        initMap();
+    }
+
+    if (document.getElementById('predictionChart')) {
+        initChart();
+        updatePrediction(12);
+    }
+
+    const selectedLang = document.getElementById('languageSelect')?.value || 'en';
+    applyTranslations(selectedLang);
+    setupDropZoneHandlers();
+
+    // Simulate live stats updates
+    setInterval(() => {
+        const activeSensors = document.getElementById('activeSensors');
+        const co2Level = document.getElementById('co2Level');
+        const truckCount = document.getElementById('truckCount');
+
+        if (!activeSensors || !co2Level || !truckCount) return;
+
+        activeSensors.textContent = Math.floor(1200 + Math.random() * 100);
+        co2Level.textContent = (2.3 + Math.random() * 0.3).toFixed(1) + 'k';
+        truckCount.textContent = Math.floor(850 + Math.random() * 100);
+    }, 5000);
+};

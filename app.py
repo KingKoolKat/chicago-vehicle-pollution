@@ -6,7 +6,7 @@ from typing import Dict, Any, List, Optional
 import modal
 from fastapi import Request
 
-APP_NAME = "trucksense-inference"
+APP_NAME = "ecotrack-inference"
 
 # Build a container image with deps.
 # Notes:
@@ -28,7 +28,7 @@ app = modal.App(APP_NAME, image=image)
 snowflake_secret = modal.Secret.from_name("SNOWFLAKE")
 
 # Persistent storage for uploaded videos (optional but handy).
-vol = modal.Volume.from_name("trucksense-videos", create_if_missing=True)
+vol = modal.Volume.from_name("ecotrack-videos", create_if_missing=True)
 VIDEO_DIR = "/data"
 DEFAULT_SEARCH_LIMIT = int(os.getenv("SNOWFLAKE_RAG_TOP_K", "5"))
 DEFAULT_CHAT_MODEL = os.getenv("SNOWFLAKE_CHAT_MODEL", "snowflake-arctic")

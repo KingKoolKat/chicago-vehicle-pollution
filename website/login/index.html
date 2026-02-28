@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoTrack - Login</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="icon" href="../image/favicon.png" type="image/x-icon">
+    <link rel="stylesheet" href="../css/styles.css">
+    <link rel="stylesheet" href="../css/mobile.css">
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900">
+    <section class="pt-28 pb-16 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+        <div class="max-w-md mx-auto glass-panel rounded-3xl p-8 border border-green-500/20">
+            <h1 class="text-3xl font-bold mb-2">Account Access</h1>
+            <p class="text-gray-400 mb-6">Login or create an account to track Chicago emissions.</p>
+
+            <div class="grid grid-cols-2 gap-2 mb-6">
+                <button id="showLoginBtn" type="button" class="py-2 rounded-lg bg-green-500/20 border border-green-500/50 text-sm font-semibold">Login</button>
+                <button id="showSignupBtn" type="button" class="py-2 rounded-lg bg-gray-800/70 border border-gray-600 text-sm font-semibold">Sign Up</button>
+            </div>
+
+            <form id="loginForm" class="space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1" for="loginEmail">Email</label>
+                    <input id="loginEmail" name="email" type="email" required
+                        class="w-full rounded-lg bg-gray-800 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1" for="loginPassword">Password</label>
+                    <input id="loginPassword" name="password" type="password" required
+                        class="w-full rounded-lg bg-gray-800 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                </div>
+                <button type="submit" class="w-full py-3 rounded-lg bg-gradient-to-r from-green-500 to-blue-600 font-semibold hover:shadow-lg transition-all">
+                    <i class="fas fa-right-to-bracket mr-2"></i>Login
+                </button>
+            </form>
+
+            <form id="signupForm" class="space-y-4 hidden">
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1" for="signupName">Full Name</label>
+                    <input id="signupName" name="name" type="text" required
+                        class="w-full rounded-lg bg-gray-800 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1" for="signupEmail">Email</label>
+                    <input id="signupEmail" name="email" type="email" required
+                        class="w-full rounded-lg bg-gray-800 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1" for="signupPassword">Password</label>
+                    <input id="signupPassword" name="password" type="password" minlength="8" required
+                        class="w-full rounded-lg bg-gray-800 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1" for="signupPasswordConfirm">Confirm Password</label>
+                    <input id="signupPasswordConfirm" name="passwordConfirm" type="password" minlength="8" required
+                        class="w-full rounded-lg bg-gray-800 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                </div>
+                <button type="submit" class="w-full py-3 rounded-lg bg-gradient-to-r from-blue-500 to-green-600 font-semibold hover:shadow-lg transition-all">
+                    <i class="fas fa-user-plus mr-2"></i>Create Account
+                </button>
+            </form>
+
+            <div class="flex items-center gap-3 my-6">
+                <div class="h-px flex-1 bg-gray-700"></div>
+                <span class="text-xs uppercase text-gray-400 tracking-wide">or</span>
+                <div class="h-px flex-1 bg-gray-700"></div>
+            </div>
+
+            <div id="googleSignInWrapper" class="flex justify-center"></div>
+            <p id="loginStatus" class="text-sm mt-5 text-center hidden"></p>
+        </div>
+    </section>
+
+    <script src="../js/auth.js"></script>
+    <script src="../js/translation.js"></script>
+    <script src="../js/components.js"></script>
+    <script src="../js/main.js"></script>
+    <script>
+        const GOOGLE_CLIENT_ID = "587139311089-aimuo7vqg17gmvb5c0s5g22kph6u6gm7.apps.googleusercontent.com";
+
+        function redirectToHome() {
+            window.location.href = "../";
+        }
+
+        function showStatus(message, isError) {
+            const status = document.getElementById("loginStatus");
+            status.textContent = message;
+            status.className = `text-sm mt-5 text-center ${isError ? "text-red-400" : "text-green-400"}`;
+            status.classList.remove("hidden");
+        }
+
+        function setMode(mode) {
+            const isLogin = mode === "login";
+            document.getElementById("loginForm").classList.toggle("hidden", !isLogin);
+            document.getElementById("signupForm").classList.toggle("hidden", isLogin);
+            document.getElementById("showLoginBtn").className = isLogin
+                ? "py-2 rounded-lg bg-green-500/20 border border-green-500/50 text-sm font-semibold"
+                : "py-2 rounded-lg bg-gray-800/70 border border-gray-600 text-sm font-semibold";
+            document.getElementById("showSignupBtn").className = !isLogin
+                ? "py-2 rounded-lg bg-green-500/20 border border-green-500/50 text-sm font-semibold"
+                : "py-2 rounded-lg bg-gray-800/70 border border-gray-600 text-sm font-semibold";
+        }
+
+        if (window.Auth && window.Auth.getSessionUser()) {
+            redirectToHome();
+        }
+
+        document.getElementById("showLoginBtn").addEventListener("click", () => setMode("login"));
+        document.getElementById("showSignupBtn").addEventListener("click", () => setMode("signup"));
+
+        document.getElementById("loginForm").addEventListener("submit", (event) => {
+            event.preventDefault();
+            const email = document.getElementById("loginEmail").value;
+            const password = document.getElementById("loginPassword").value;
+            const result = window.Auth.login({ email, password });
+
+            if (!result.ok) {
+                showStatus(result.message, true);
+                return;
+            }
+
+            showStatus(`Welcome back, ${result.user.name}.`, false);
+            setTimeout(redirectToHome, 300);
+        });
+
+        document.getElementById("signupForm").addEventListener("submit", (event) => {
+            event.preventDefault();
+            const name = document.getElementById("signupName").value;
+            const email = document.getElementById("signupEmail").value;
+            const password = document.getElementById("signupPassword").value;
+            const confirmPassword = document.getElementById("signupPasswordConfirm").value;
+
+            if (password !== confirmPassword) {
+                showStatus("Passwords do not match.", true);
+                return;
+            }
+
+            const result = window.Auth.signUp({ name, email, password });
+            if (!result.ok) {
+                showStatus(result.message, true);
+                return;
+            }
+
+            showStatus(`Account created for ${result.user.name}.`, false);
+            setTimeout(redirectToHome, 300);
+        });
+
+        function parseJwtCredential(credential) {
+            const tokenParts = credential.split(".");
+            if (tokenParts.length < 2) return null;
+            const payload = tokenParts[1]
+                .replace(/-/g, "+")
+                .replace(/_/g, "/");
+
+            try {
+                return JSON.parse(atob(payload));
+            } catch (error) {
+                console.error("Unable to parse Google JWT payload", error);
+                return null;
+            }
+        }
+
+        function handleGoogleCredential(response) {
+            if (!response || !response.credential) {
+                showStatus("Google sign-in failed. Try again.", true);
+                return;
+            }
+
+            const profile = parseJwtCredential(response.credential);
+            const result = window.Auth.upsertGoogleUser(profile);
+            if (!result.ok) {
+                showStatus(result.message, true);
+                return;
+            }
+
+            showStatus(`Signed in with Google as ${result.user.name}.`, false);
+            setTimeout(redirectToHome, 300);
+        }
+
+        window.addEventListener("load", () => {
+            if (typeof google === "undefined" || !google.accounts || !google.accounts.id) {
+                return;
+            }
+
+            google.accounts.id.initialize({
+                client_id: GOOGLE_CLIENT_ID,
+                callback: handleGoogleCredential
+            });
+
+            google.accounts.id.renderButton(
+                document.getElementById("googleSignInWrapper"),
+                { theme: "filled_black", size: "large", text: "signin_with", width: 280 }
+            );
+        });
+    </script>
+</body>
+</html>

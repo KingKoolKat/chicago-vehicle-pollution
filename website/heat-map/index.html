@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="icon" href="image/favicon.png" type="image/x-icon">
+    <link rel="icon" href="../image/favicon.png" type="image/x-icon">
     <link rel="stylesheet" href="../css/styles.css">
     <link rel="stylesheet" href="../css/mobile.css">
 </head>
@@ -112,7 +112,7 @@
                         <label class="block text-sm font-medium mb-3" data-i18n="predict.location">Location Analysis</label>
                         <select id="locationSelect" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 mb-4 focus:outline-none focus:border-green-400" onchange="updateLocationTrend()">
                             <option value="downtown">Downtown Core</option>
-                            <option value="highway">Highway I-95</option>
+                            <option value="highway">I-90 / I-94 Corridor</option>
                             <option value="industrial">Industrial Zone</option>
                             <option value="residential">Residential North</option>
                             <option value="harbor">Port Harbor</option>
@@ -153,6 +153,7 @@
         </div>
     </section>
 
+    <script src="../js/auth.js"></script>
     <script src="../js/translation.js"></script>
     <script src="../js/components.js"></script>
     <script src="../js/main.js"></script>
