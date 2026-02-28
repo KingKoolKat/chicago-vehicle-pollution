@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoTrack - Real-time Pollution Monitoring & Prediction</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="icon" href="image/favicon.png" type="image/x-icon">
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/mobile.css">
+</head>
+<body class="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900">
+    <!-- AI Chat Section -->
+    <section id="chat" class="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto mb-20">
+        <div class="glass-panel rounded-3xl p-8 max-w-4xl mx-auto">
+            <div class="flex items-center justify-between mb-6">
+                <div>
+                    <h2 class="text-3xl font-bold" data-i18n="chat.title">AI Environmental Assistant</h2>
+                    <p class="text-gray-400 text-sm mt-1" data-i18n="chat.subtitle">Ask about pollution data, trends, or recommendations</p>
+                </div>
+                <div class="w-12 h-12 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 flex items-center justify-center animate-pulse">
+                    <i class="fas fa-robot text-white text-xl"></i>
+                </div>
+            </div>
+            
+            <div class="glass-panel rounded-2xl p-4 h-96 overflow-y-auto mb-4 space-y-4" id="chatContainer">
+                <div class="chat-message flex gap-3">
+                    <div class="w-8 h-8 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 flex-shrink-0 flex items-center justify-center">
+                        <i class="fas fa-robot text-white text-xs"></i>
+                    </div>
+                    <div class="glass-panel rounded-2xl rounded-tl-none px-4 py-3 max-w-[80%]">
+                        <p class="text-sm" data-i18n="chat.welcome">Hello! I'm your environmental data assistant. I can help you understand pollution trends, predict emissions, or analyze traffic impact. What would you like to know?</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="flex gap-3">
+                <input type="text" id="chatInput" placeholder="Ask about emissions, traffic, or predictions..." 
+                    class="flex-1 bg-gray-800 border border-gray-600 rounded-xl px-4 py-3 focus:outline-none focus:border-green-400 transition-colors"
+                    onkeypress="if(event.key==='Enter') sendMessage()">
+                <button onclick="sendMessage()" class="px-6 py-3 bg-gradient-to-r from-green-500 to-blue-600 rounded-xl hover:shadow-lg transition-all">
+                    <i class="fas fa-paper-plane"></i>
+                </button>
+            </div>
+            
+            <div class="flex gap-2 mt-4 flex-wrap">
+                <button onclick="quickAsk('What are current emission levels?')" class="text-xs px-3 py-1 rounded-full bg-gray-800 hover:bg-gray-700 transition-colors border border-gray-600" data-i18n="chat.quick1">Current levels?</button>
+                <button onclick="quickAsk('Show me rush hour predictions')" class="text-xs px-3 py-1 rounded-full bg-gray-800 hover:bg-gray-700 transition-colors border border-gray-600" data-i18n="chat.quick2">Rush hour?</button>
+                <button onclick="quickAsk('Which areas are most polluted?')" class="text-xs px-3 py-1 rounded-full bg-gray-800 hover:bg-gray-700 transition-colors border border-gray-600" data-i18n="chat.quick3">Worst areas?</button>
+                <button onclick="quickAsk('How can I reduce my carbon footprint?')" class="text-xs px-3 py-1 rounded-full bg-gray-800 hover:bg-gray-700 transition-colors border border-gray-600" data-i18n="chat.quick4">Reduce emissions?</button>
+            </div>
+        </div>
+    </section>
+
+    <script src="js/main.js"></script>
+    <script src="js/translation.js"></script>
+</body>
+</html>

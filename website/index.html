@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoTrack - Real-time Pollution Monitoring & Prediction</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="icon" href="image/favicon.png" type="image/x-icon">
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/mobile.css">
+</head>
+<body class="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900">
+
+    <!-- Language Selector -->
+    <div class="language-selector">
+        <select id="languageSelect" class="glass-panel px-4 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-400 cursor-pointer">
+            <option value="en">English</option>
+            <option value="es">Español</option>
+            <option value="zh">中文</option>
+        </select>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="fixed w-full z-50 glass-panel border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-r from-green-400 to-blue-500 flex items-center justify-center">
+                        <i class="fas fa-leaf text-white text-xl"></i>
+                    </div>
+                    <span class="text-2xl font-bold bg-gradient-to-r from-green-400 to-blue-400 bg-clip-text text-transparent" data-i18n="appName">EcoTrack</span>
+                </div>
+                <div class="hidden md:block">
+                    <div class="ml-10 flex items-baseline space-x-8">
+                        <a href="#dashboard" class="hover:text-green-400 transition-colors px-3 py-2 rounded-md text-sm font-medium" data-i18n="nav.dashboard">Dashboard</a>
+                        <a href="#heatmap" class="hover:text-green-400 transition-colors px-3 py-2 rounded-md text-sm font-medium" data-i18n="nav.heatmap">Heat Map</a>
+                        <a href="#predictions" class="hover:text-green-400 transition-colors px-3 py-2 rounded-md text-sm font-medium" data-i18n="nav.predictions">Predictions</a>
+                        <a href="#upload" class="hover:text-green-400 transition-colors px-3 py-2 rounded-md text-sm font-medium" data-i18n="nav.upload">Upload Data</a>
+                        <a href="/chatbot" class="hover:text-green-400 transition-colors px-3 py-2 rounded-md text-sm font-medium" data-i18n="nav.chat">AI Assistant</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="pt-32 pb-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+        <div class="text-center mb-16">
+            <h1 class="text-5xl md:text-7xl font-bold mb-6 neon-text bg-gradient-to-r from-green-400 via-blue-400 to-purple-400 bg-clip-text text-transparent" data-i18n="hero.title">
+                Real-Time Pollution Intelligence
+            </h1>
+            <p class="text-xl text-gray-300 max-w-3xl mx-auto mb-8" data-i18n="hero.subtitle">
+                Monitor traffic emissions, predict pollution trends, and contribute to cleaner cities with AI-powered analytics
+            </p>
+            <div class="flex justify-center gap-4">
+                <button onclick="scrollToSection('heatmap')" class="px-8 py-4 bg-gradient-to-r from-green-500 to-blue-600 rounded-full font-semibold hover:shadow-lg hover:shadow-green-500/30 transition-all transform hover:scale-105">
+                    <i class="fas fa-map-marked-alt mr-2"></i>
+                    <span data-i18n="hero.cta.map">View Heat Map</span>
+                </button>
+                <button onclick="scrollToSection('upload')" class="px-8 py-4 glass-panel rounded-full font-semibold hover:bg-white/10 transition-all transform hover:scale-105 border border-green-400/30">
+                    <i class="fas fa-camera mr-2"></i>
+                    <span data-i18n="hero.cta.upload">Upload Video</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Live Stats -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-16">
+            <div class="stat-card glass-panel rounded-2xl p-6 border border-green-500/20">
+                <div class="flex items-center justify-between mb-4">
+                    <i class="fas fa-car text-3xl text-green-400"></i>
+                    <span class="text-xs text-gray-400 uppercase tracking-wider" data-i18n="stats.active">Active Sensors</span>
+                </div>
+                <div class="text-3xl font-bold text-white" id="activeSensors">1,247</div>
+                <div class="text-sm text-green-400 mt-2"><i class="fas fa-arrow-up mr-1"></i>+12% <span data-i18n="stats.today">today</span></div>
+            </div>
+            
+            <div class="stat-card glass-panel rounded-2xl p-6 border border-blue-500/20">
+                <div class="flex items-center justify-between mb-4">
+                    <i class="fas fa-cloud text-3xl text-blue-400"></i>
+                    <span class="text-xs text-gray-400 uppercase tracking-wider" data-i18n="stats.co2">CO2 Emissions</span>
+                </div>
+                <div class="text-3xl font-bold text-white" id="co2Level">2.4k</div>
+                <div class="text-sm text-gray-400 mt-2">tons <span data-i18n="stats.hourly">/ hour</span></div>
+            </div>
+            
+            <div class="stat-card glass-panel rounded-2xl p-6 border border-yellow-500/20">
+                <div class="flex items-center justify-between mb-4">
+                    <i class="fas fa-truck text-3xl text-yellow-400"></i>
+                    <span class="text-xs text-gray-400 uppercase tracking-wider" data-i18n="stats.trucks">Heavy Vehicles</span>
+                </div>
+                <div class="text-3xl font-bold text-white" id="truckCount">892</div>
+                <div class="text-sm text-yellow-400 mt-2"><i class="fas fa-exclamation-triangle mr-1"></i><span data-i18n="stats.high">High traffic</span></div>
+            </div>
+            
+            <div class="stat-card glass-panel rounded-2xl p-6 border border-purple-500/20">
+                <div class="flex items-center justify-between mb-4">
+                    <i class="fas fa-brain text-3xl text-purple-400"></i>
+                    <span class="text-xs text-gray-400 uppercase tracking-wider" data-i18n="stats.accuracy">AI Accuracy</span>
+                </div>
+                <div class="text-3xl font-bold text-white">94.2%</div>
+                <div class="text-sm text-purple-400 mt-2"><i class="fas fa-check-circle mr-1"></i><span data-i18n="stats.validated">Validated</span></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Heat Map Section -->
+    <section id="heatmap" class="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+        <div class="glass-panel rounded-3xl p-8 mb-8">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2" data-i18n="map.title">Emissions Heat Map</h2>
+                    <p class="text-gray-400" data-i18n="map.subtitle">Real-time traffic and pollution intensity visualization</p>
+                </div>
+                <div class="flex gap-3">
+                    <button onclick="toggleLayer('traffic')" class="px-4 py-2 rounded-lg bg-blue-500/20 border border-blue-500/50 hover:bg-blue-500/30 transition-all active" id="btn-traffic">
+                        <i class="fas fa-traffic-light mr-2"></i>Traffic
+                    </button>
+                    <button onclick="toggleLayer('emissions')" class="px-4 py-2 rounded-lg bg-green-500/20 border border-green-500/50 hover:bg-green-500/30 transition-all active" id="btn-emissions">
+                        <i class="fas fa-smog mr-2"></i>Emissions
+                    </button>
+                </div>
+            </div>
+            
+            <div class="relative">
+                <div id="map" class="shadow-2xl"></div>
+                
+                <!-- Map Controls Overlay -->
+                <div class="absolute top-4 right-4 z-[1000] glass-panel rounded-xl p-4 max-w-xs">
+                    <h4 class="font-semibold mb-3 text-sm" data-i18n="map.legend">Intensity Legend</h4>
+                    <div class="heatmap-legend mb-2"></div>
+                    <div class="flex justify-between text-xs text-gray-400">
+                        <span data-i18n="legend.low">Low</span>
+                        <span data-i18n="legend.high">Critical</span>
+                    </div>
+                    <div class="mt-4 space-y-2">
+                        <div class="flex items-center gap-2 text-xs">
+                            <div class="w-3 h-3 rounded-full bg-green-400"></div>
+                            <span data-i18n="legend.normal">&lt; 50 ppm Normal</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-xs">
+                            <div class="w-3 h-3 rounded-full bg-yellow-400"></div>
+                            <span data-i18n="legend.moderate">50-150 Moderate</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-xs">
+                            <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                            <span data-i18n="legend.severe">&gt; 150 Severe</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="glass-panel rounded-xl p-4 border-l-4 border-red-500">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400 text-sm" data-i18n="alerts.critical">Critical Zones</span>
+                        <span class="text-2xl font-bold text-red-400">3</span>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">Downtown, Industrial District, Harbor</p>
+                </div>
+                <div class="glass-panel rounded-xl p-4 border-l-4 border-yellow-500">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400 text-sm" data-i18n="alerts.moderate">Moderate Alerts</span>
+                        <span class="text-2xl font-bold text-yellow-400">7</span>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">Highway intersections, School zones</p>
+                </div>
+                <div class="glass-panel rounded-xl p-4 border-l-4 border-green-500">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400 text-sm" data-i18n="alerts.improving">Improving</span>
+                        <span class="text-2xl font-bold text-green-400">12</span>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">Residential areas, Parks</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Predictions Section -->
+    <section id="predictions" class="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+        <div class="glass-panel rounded-3xl p-8">
+            <h2 class="text-3xl font-bold mb-6" data-i18n="predict.title">Emission Predictions</h2>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Controls -->
+                <div class="space-y-6">
+                    <div class="glass-panel rounded-xl p-6">
+                        <label class="block text-sm font-medium mb-3" data-i18n="predict.time">Select Time Frame</label>
+                        <input type="range" min="0" max="23" value="12" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer slider-thumb" id="timeSlider" oninput="updatePrediction(this.value)">
+                        <div class="flex justify-between text-xs text-gray-400 mt-2">
+                            <span>00:00</span>
+                            <span>12:00</span>
+                            <span>23:00</span>
+                        </div>
+                        <div class="mt-4 text-center">
+                            <span class="text-2xl font-bold text-green-400" id="selectedTime">12:00</span>
+                            <span class="text-gray-400 ml-2" data-i18n="predict.selected">Selected</span>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-panel rounded-xl p-6">
+                        <label class="block text-sm font-medium mb-3" data-i18n="predict.location">Location Analysis</label>
+                        <select id="locationSelect" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 mb-4 focus:outline-none focus:border-green-400" onchange="updateLocationTrend()">
+                            <option value="downtown">Downtown Core</option>
+                            <option value="highway">Highway I-95</option>
+                            <option value="industrial">Industrial Zone</option>
+                            <option value="residential">Residential North</option>
+                            <option value="harbor">Port Harbor</option>
+                        </select>
+                        <button onclick="runPrediction()" class="w-full py-3 bg-gradient-to-r from-green-500 to-blue-600 rounded-lg font-semibold hover:shadow-lg transition-all">
+                            <i class="fas fa-calculator mr-2"></i>
+                            <span data-i18n="predict.calculate">Calculate Prediction</span>
+                        </button>
+                    </div>
+                    
+                    <div class="glass-panel rounded-xl p-6 border border-yellow-500/30">
+                        <h4 class="font-semibold mb-2 text-yellow-400"><i class="fas fa-lightbulb mr-2"></i><span data-i18n="predict.insight">AI Insight</span></h4>
+                        <p class="text-sm text-gray-300" id="aiInsight" data-i18n="predict.insightText">
+                            Peak emissions expected at 18:00 due to rush hour traffic. Recommend alternative routing.
+                        </p>
+                    </div>
+                </div>
+                
+                <!-- Chart -->
+                <div class="lg:col-span-2 glass-panel rounded-xl p-6">
+                    <canvas id="predictionChart" width="400" height="200"></canvas>
+                    <div class="mt-4 grid grid-cols-3 gap-4 text-center">
+                        <div class="p-3 rounded-lg bg-gray-800/50">
+                            <div class="text-xs text-gray-400" data-i18n="stats.current">Current</div>
+                            <div class="text-xl font-bold text-white" id="currentVal">145 ppm</div>
+                        </div>
+                        <div class="p-3 rounded-lg bg-gray-800/50">
+                            <div class="text-xs text-gray-400" data-i18n="stats.predicted">Predicted</div>
+                            <div class="text-xl font-bold text-yellow-400" id="predictedVal">189 ppm</div>
+                        </div>
+                        <div class="p-3 rounded-lg bg-gray-800/50">
+                            <div class="text-xs text-gray-400" data-i18n="stats.change">Change</div>
+                            <div class="text-xl font-bold text-red-400" id="changeVal">+30%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Video Upload Section -->
+    <section id="upload" class="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+        <div class="glass-panel rounded-3xl p-8">
+            <h2 class="text-3xl font-bold mb-2" data-i18n="upload.title">Contribute Data</h2>
+            <p class="text-gray-400 mb-8" data-i18n="upload.subtitle">Upload road footage to train our AI and improve predictions</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <!-- Upload Area -->
+                <div class="space-y-6">
+                    <div class="border-2 border-dashed border-gray-600 rounded-2xl p-8 text-center hover:border-green-400 transition-colors cursor-pointer relative overflow-hidden" onclick="document.getElementById('videoInput').click()" id="dropZone">
+                        <input type="file" id="videoInput" accept="video/*" class="hidden" onchange="handleVideoUpload(event)">
+                        <div class="mb-4">
+                            <i class="fas fa-cloud-upload-alt text-5xl text-gray-400"></i>
+                        </div>
+                        <h3 class="text-lg font-semibold mb-2" data-i18n="upload.drop">Drop video here or click to upload</h3>
+                        <p class="text-sm text-gray-500" data-i18n="upload.formats">Supports MP4, MOV, AVI (Max 500MB)</p>
+                        
+                        <div id="uploadProgress" class="hidden mt-4">
+                            <div class="w-full bg-gray-700 rounded-full h-2 mb-2">
+                                <div class="bg-green-400 h-2 rounded-full transition-all duration-300" style="width: 0%" id="progressBar"></div>
+                            </div>
+                            <p class="text-sm text-green-400" id="uploadStatus">Uploading...</p>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-panel rounded-xl p-6">
+                        <h4 class="font-semibold mb-4"><i class="fas fa-camera mr-2 text-blue-400"></i><span data-i18n="upload.live">Live Camera</span></h4>
+                        <div class="video-preview rounded-lg h-48 flex items-center justify-center relative overflow-hidden" id="cameraPreview">
+                            <div class="text-center">
+                                <i class="fas fa-video text-4xl text-gray-600 mb-2"></i>
+                                <p class="text-sm text-gray-500" data-i18n="upload.cameraText">Camera access required</p>
+                            </div>
+                            <video id="liveVideo" class="absolute inset-0 w-full h-full object-cover hidden" autoplay></video>
+                            <canvas id="analysisCanvas" class="absolute inset-0 w-full h-full hidden"></canvas>
+                        </div>
+                        <div class="flex gap-3 mt-4">
+                            <button onclick="startCamera()" class="flex-1 py-2 bg-blue-500/20 border border-blue-500 rounded-lg hover:bg-blue-500/30 transition-all text-sm">
+                                <i class="fas fa-play mr-2"></i><span data-i18n="upload.start">Start</span>
+                            </button>
+                            <button onclick="stopCamera()" class="flex-1 py-2 bg-red-500/20 border border-red-500 rounded-lg hover:bg-red-500/30 transition-all text-sm">
+                                <i class="fas fa-stop mr-2"></i><span data-i18n="upload.stop">Stop</span>
+                            </button>
+                            <button onclick="captureFrame()" class="flex-1 py-2 bg-green-500/20 border border-green-500 rounded-lg hover:bg-green-500/30 transition-all text-sm">
+                                <i class="fas fa-camera mr-2"></i><span data-i18n="upload.capture">Capture</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Analysis Results -->
+                <div class="space-y-6">
+                    <div class="glass-panel rounded-xl p-6 h-full">
+                        <h4 class="font-semibold mb-4"><i class="fas fa-chart-bar mr-2 text-green-400"></i><span data-i18n="upload.analysis">Real-time Analysis</span></h4>
+                        
+                        <div id="analysisResults" class="space-y-4">
+                            <div class="text-center text-gray-500 py-12">
+                                <i class="fas fa-robot text-4xl mb-3"></i>
+                                <p data-i18n="upload.waiting">Waiting for video input...</p>
+                            </div>
+                        </div>
+                        
+                        <div id="activeAnalysis" class="hidden space-y-4">
+                            <div class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+                                <span class="text-sm text-gray-400">Vehicles Detected</span>
+                                <span class="text-xl font-bold text-green-400" id="vehicleCount">0</span>
+                            </div>
+                            <div class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+                                <span class="text-sm text-gray-400">Trucks/Heavy</span>
+                                <span class="text-xl font-bold text-yellow-400" id="truckDetected">0</span>
+                            </div>
+                            <div class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+                                <span class="text-sm text-gray-400">Est. Emissions</span>
+                                <span class="text-xl font-bold text-red-400" id="liveEmissions">0 kg/h</span>
+                            </div>
+                            <div class="p-3 bg-blue-900/30 border border-blue-500/30 rounded-lg">
+                                <div class="text-xs text-blue-400 mb-1">LOCATION</div>
+                                <div class="text-sm font-mono" id="gpsCoords">--°--'--" N, --°--'--" E</div>
+                            </div>
+                            <div class="p-3 bg-purple-900/30 border border-purple-500/30 rounded-lg">
+                                <div class="text-xs text-purple-400 mb-1">TIMESTAMP</div>
+                                <div class="text-sm font-mono" id="timestamp">--:--:--</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <script src="js/main.js"></script>
+    <script src="js/translation.js"></script>
+</body>
+</html>
