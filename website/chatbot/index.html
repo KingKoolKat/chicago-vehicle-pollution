@@ -10,10 +10,42 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link rel="icon" href="image/favicon.png" type="image/x-icon">
-    <link rel="stylesheet" href="css/styles.css">
-    <link rel="stylesheet" href="css/mobile.css">
+    <link rel="stylesheet" href="../css/styles.css">
+    <link rel="stylesheet" href="../css/mobile.css">
 </head>
 <body class="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900">
+    <!-- Language Selector -->
+    <div class="language-selector">
+        <select id="languageSelect" class="glass-panel px-4 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-400 cursor-pointer">
+            <option value="en">English</option>
+            <option value="es">Español</option>
+            <option value="zh">中文</option>
+        </select>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="fixed w-full z-50 glass-panel border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-r from-green-400 to-blue-500 flex items-center justify-center">
+                        <i class="fas fa-leaf text-white text-xl"></i>
+                    </div>
+                    <span class="text-2xl font-bold bg-gradient-to-r from-green-400 to-blue-400 bg-clip-text text-transparent" data-i18n="appName">EcoTrack</span>
+                </div>
+                <div class="hidden md:block">
+                    <div class="ml-10 flex items-baseline space-x-8">
+                        <a href="#dashboard" class="hover:text-green-400 transition-colors px-3 py-2 rounded-md text-sm font-medium" data-i18n="nav.dashboard">Dashboard</a>
+                        <a href="#heatmap" class="hover:text-green-400 transition-colors px-3 py-2 rounded-md text-sm font-medium" data-i18n="nav.heatmap">Heat Map</a>
+                        <a href="#predictions" class="hover:text-green-400 transition-colors px-3 py-2 rounded-md text-sm font-medium" data-i18n="nav.predictions">Predictions</a>
+                        <a href="#upload" class="hover:text-green-400 transition-colors px-3 py-2 rounded-md text-sm font-medium" data-i18n="nav.upload">Upload Data</a>
+                        <a href="/chatbot" class="hover:text-green-400 transition-colors px-3 py-2 rounded-md text-sm font-medium" data-i18n="nav.chat">AI Assistant</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
     <!-- AI Chat Section -->
     <section id="chat" class="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto mb-20">
         <div class="glass-panel rounded-3xl p-8 max-w-4xl mx-auto">
