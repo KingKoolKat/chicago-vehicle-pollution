@@ -64,3 +64,30 @@ Use the deployed `chat` endpoint URL in frontend if not same-origin:
 ```
 
 If omitted, frontend defaults to `"/chat"`.
+
+## 4) Vision counting endpoints
+
+- `POST /upload_and_count`:
+  video tracking mode (counts unique vehicles by track ID)
+- `POST /upload_image_and_count`:
+  still-image detection mode (counts detected vehicles in one frame)
+
+Example `curl` for still image:
+
+```bash
+curl -X POST "https://<your-modal-endpoint>/upload_image_and_count" \
+  -F "file=@/absolute/path/to/image.jpg" \
+  -F "lat=41.8781" \
+  -F "lng=-87.6298" \
+  -F "camera_id=1"
+```
+
+Example `curl` for video:
+
+```bash
+curl -X POST "https://<your-modal-endpoint>/upload_and_count" \
+  -F "file=@/absolute/path/to/video.mp4" \
+  -F "lat=41.8781" \
+  -F "lng=-87.6298" \
+  -F "camera_id=1"
+```
