@@ -19,7 +19,7 @@
         <div class="glass-panel rounded-3xl p-8 mb-8">
             <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
                 <div>
-                    <h2 class="text-3xl font-bold mb-2" data-i18n="map.title">Emissions Heat Map</h2>
+                    <h2 id="heatmapTitle" class="text-3xl font-bold mb-2" data-i18n="map.titleTraffic">Traffic Heat Map</h2>
                     <p class="text-gray-400" data-i18n="map.subtitle">Real-time traffic and pollution intensity visualization</p>
                 </div>
                 <div class="flex flex-col md:items-end gap-3 w-full md:w-auto">
@@ -104,12 +104,12 @@
                 <div id="map" class="shadow-2xl"></div>
                 
                 <!-- Map Controls Overlay -->
-                <div class="absolute top-4 right-4 z-[1000] glass-panel rounded-xl p-4 max-w-xs">
+                <div class="absolute top-4 right-4 z-[1000] glass-panel rounded-xl p-4 w-72 sm:w-80 max-w-full">
                     <h4 class="font-semibold mb-3 text-sm" data-i18n="map.legend">Intensity Legend</h4>
                     <div class="heatmap-legend mb-2"></div>
                     <div class="flex justify-between text-xs text-gray-400">
-                        <span id="legendScaleLow">--</span>
-                        <span id="legendScaleHigh">--</span>
+                        <span id="legendScaleLow" class="whitespace-nowrap">--</span>
+                        <span id="legendScaleHigh" class="whitespace-nowrap">--</span>
                     </div>
                     <div id="diffusionLegendRow" class="mt-4 hidden">
                         <div class="text-xs text-gray-400">

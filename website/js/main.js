@@ -51,9 +51,21 @@ function applyTranslations(lang) {
     });
 }
 
+function updateHeatmapTitle() {
+    const title = document.getElementById('heatmapTitle');
+    if (!title) return;
+
+    const lang = document.getElementById('languageSelect')?.value || 'en';
+    const titleKey = heatmapMode === 'emissions' ? 'map.titleEmissions' : 'map.titleTraffic';
+    const fallback = heatmapMode === 'emissions' ? 'Emissions Heat Map' : 'Traffic Heat Map';
+    const translated = (translations[lang] && translations[lang][titleKey]) || fallback;
+    title.textContent = translated;
+}
+
 // Language Switcher
 document.getElementById('languageSelect').addEventListener('change', (e) => {
     applyTranslations(e.target.value);
+    updateHeatmapTitle();
 });
 
 function waitForElementById(id, retries = 30, delayMs = 100) {
@@ -1212,6 +1224,7 @@ function syncHeatmapControls() {
         methodPanel.classList.add('hidden');
     }
 
+    updateHeatmapTitle();
     updateHeatmapLegend();
     updateDiffusionRadiusLabel();
 }
