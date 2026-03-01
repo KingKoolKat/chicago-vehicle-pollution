@@ -257,6 +257,42 @@ function toSafeNumber(value, fallback = 0) {
     return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+function formatDashboardEmissionKg(totalKg) {
+    const numeric = toSafeNumber(totalKg, 0);
+    if (numeric >= 1000) return formatMeasure(numeric, 0);
+    if (numeric >= 100) return formatMeasure(numeric, 1);
+    return formatMeasure(numeric, 2);
+}
+
+function computeSummaryEmissionTotal(summary, pollutant) {
+    const meta = resolvePollutantConfig(pollutant, HEATMAP_POLLUTANTS);
+    const car = toSafeNumber(summary?.car_count, 0);
+    const truck = toSafeNumber(summary?.truck_count, 0);
+    const bus = toSafeNumber(summary?.bus_count, 0);
+    const motorcycle = toSafeNumber(summary?.motorcycle_count, 0);
+
+    const totalRaw = (car * meta.factors.car)
+        + (truck * meta.factors.truck)
+        + (bus * meta.factors.bus)
+        + (motorcycle * meta.factors.motorcycle);
+
+    return totalRaw * meta.totalDisplayScale;
+}
+
+function updateHeroStatsFromTrafficPayload(payload) {
+    const vehiclesNode = document.getElementById('vehiclesYesterday');
+    const co2Node = document.getElementById('co2Yesterday');
+    const noxNode = document.getElementById('noxYesterday');
+    const pm25Node = document.getElementById('pm25Yesterday');
+    if (!vehiclesNode || !co2Node || !noxNode || !pm25Node) return;
+
+    const summary = payload?.summary || {};
+    vehiclesNode.textContent = formatCount(summary.total_unique_vehicles);
+    co2Node.textContent = formatDashboardEmissionKg(computeSummaryEmissionTotal(summary, 'CO2'));
+    noxNode.textContent = formatDashboardEmissionKg(computeSummaryEmissionTotal(summary, 'NOx'));
+    pm25Node.textContent = formatDashboardEmissionKg(computeSummaryEmissionTotal(summary, 'PM2.5'));
+}
+
 function clamp01(value) {
     return Math.max(0, Math.min(1, Number(value) || 0));
 }
@@ -323,13 +359,43 @@ function currentDiffusionRadiusMeters() {
         : HEATMAP_TRAFFIC_RADIUS_METERS;
 }
 
-function updateHeatmapLegend() {
+function heatmapLegendUnitLabel() {
+    if (heatmapMode !== 'emissions') return 'veh';
+    const pollutantMeta = resolvePollutantConfig(selectedPollutant, HEATMAP_POLLUTANTS);
+    return selectedEmissionMetric === 'intensity' ? pollutantMeta.intensityUnit : pollutantMeta.totalUnit;
+}
+
+function formatHeatmapLegendValue(value) {
+    const numeric = toSafeNumber(value, 0);
+    if (heatmapMode !== 'emissions') {
+        return formatCount(Math.round(numeric));
+    }
+    if (selectedEmissionMetric === 'intensity') {
+        return formatMeasure(numeric, 2);
+    }
+    const pollutantMeta = resolvePollutantConfig(selectedPollutant, HEATMAP_POLLUTANTS);
+    return formatDashboardEmissionKg(numeric * pollutantMeta.totalDisplayScale);
+}
+
+function updateHeatmapLegend(scale = null) {
     const lowScaleLabel = document.getElementById('legendScaleLow');
     const highScaleLabel = document.getElementById('legendScaleHigh');
     const gradientBar = document.querySelector('.heatmap-legend');
+    const unit = heatmapLegendUnitLabel();
+    const hasScale = scale
+        && Number.isFinite(scale.p05)
+        && Number.isFinite(scale.p95);
 
-    if (lowScaleLabel) lowScaleLabel.textContent = 'Low';
-    if (highScaleLabel) highScaleLabel.textContent = 'High';
+    if (lowScaleLabel) {
+        lowScaleLabel.textContent = hasScale
+            ? `P5: ${formatHeatmapLegendValue(scale.p05)} ${unit}`
+            : `P5: -- ${unit}`;
+    }
+    if (highScaleLabel) {
+        highScaleLabel.textContent = hasScale
+            ? `P95: ${formatHeatmapLegendValue(scale.p95)} ${unit}`
+            : `P95: -- ${unit}`;
+    }
 
     if (gradientBar) {
         const palette = resolveCurrentColorPalette();
@@ -673,15 +739,22 @@ function computeTrafficWeights(cameras) {
 }
 
 function normalizeHeatmapWeights(cameras) {
-    const maxWeight = cameras.reduce(
-        (maxValue, camera) => Math.max(maxValue, toSafeNumber(camera.heat_weight, 0)),
-        0
-    );
-    const denominator = maxWeight > 0 ? maxWeight : 1;
+    const weights = cameras
+        .map((camera) => toSafeNumber(camera.heat_weight, 0))
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b);
 
-    return cameras.map((camera) => {
+    const p05 = weights.length > 0 ? percentileFromSorted(weights, 0.05) : 0;
+    const p95 = weights.length > 0 ? percentileFromSorted(weights, 0.95) : 0;
+    const spread = p95 - p05;
+    const maxWeight = weights.length > 0 ? weights[weights.length - 1] : 0;
+    const fallbackDenominator = maxWeight > 0 ? maxWeight : 1;
+
+    const normalizedCameras = cameras.map((camera) => {
         const weight = toSafeNumber(camera.heat_weight, 0);
-        const intensity = clamp01(weight / denominator);
+        const intensity = spread > 0
+            ? clamp01((weight - p05) / spread)
+            : clamp01(weight / fallbackDenominator);
         return {
             ...camera,
             heat_weight: weight,
@@ -689,6 +762,11 @@ function normalizeHeatmapWeights(cameras) {
             traffic_level: trafficLevelFromIntensity(intensity),
         };
     });
+
+    return {
+        cameras: normalizedCameras,
+        scale: { p05, p95 },
+    };
 }
 
 function buildHeatmapSummary(cameras) {
@@ -1075,7 +1153,9 @@ function renderCurrentHeatmap() {
         })
         : computeTrafficWeights(rawCameras);
 
-    const normalized = normalizeHeatmapWeights(weightedCameras);
+    const normalizedResult = normalizeHeatmapWeights(weightedCameras);
+    const normalized = normalizedResult.cameras;
+    updateHeatmapLegend(normalizedResult.scale);
     renderHeatmapMarkers(normalized);
 
     const summary = buildHeatmapSummary(normalized);
@@ -1202,6 +1282,7 @@ async function loadTrafficMap(date = null) {
         buildCongestionCacheForDate(dateKey, cameras, HEATMAP_CONGESTION_K);
 
         latestTrafficPayload = data;
+        updateHeroStatsFromTrafficPayload(data);
         updateTrafficDateControls(data.selected_date, data.available_dates || []);
         renderCurrentHeatmap();
     } catch (error) {
@@ -1590,18 +1671,14 @@ window.onload = async function() {
     applyTranslations(selectedLang);
     setupDropZoneHandlers();
 
-    // Simulate live stats updates
-    setInterval(() => {
-        const activeSensors = document.getElementById('activeSensors');
-        const co2Level = document.getElementById('co2Level');
-        const truckCount = document.getElementById('truckCount');
-
-        if (!activeSensors || !co2Level || !truckCount) return;
-
-        activeSensors.textContent = Math.floor(1200 + Math.random() * 100);
-        co2Level.textContent = (2.3 + Math.random() * 0.3).toFixed(1) + 'k';
-        truckCount.textContent = Math.floor(850 + Math.random() * 100);
-    }, 5000);
+    if (!document.getElementById('map') && document.getElementById('vehiclesYesterday')) {
+        try {
+            const data = await fetchTrafficMapData();
+            updateHeroStatsFromTrafficPayload(data);
+        } catch (error) {
+            console.error('Failed to load hero stats data', error);
+        }
+    }
 };
 
 function requireAuthForUploadRoute() {

@@ -1,0 +1,24 @@
+[
+  {
+    "id": "102083712408976459122",
+    "name": "Jon Hogg",
+    "email": "jonathan.hogg3.9@gmail.com",
+    "provider": "google",
+    "role": "resident",
+    "avatar_url": "https://lh3.googleusercontent.com/a/ACg8ocLuhlayD8P-tmBKbDAd7zKLG3sfDeKHB01gurrcYKJGEX4a3Fw=s96-c",
+    "salt": "",
+    "password_hash": "",
+    "created_at": "2026-03-01T04:23:45Z"
+  },
+  {
+    "id": "739911e9-914d-4696-bd0f-182e116c1547",
+    "name": "Jon Hogg",
+    "email": "jo.hogg@icloud.com",
+    "provider": "local",
+    "role": "resident",
+    "avatar_url": "",
+    "salt": "3b06c39c12c49e37990b2373a960a62f",
+    "password_hash": "07bfc70f1f17f2758269bd517c5366ed9c609ebe69a71ade6a3b84567dabc813",
+    "created_at": "2026-03-01T04:25:47Z"
+  }
+]

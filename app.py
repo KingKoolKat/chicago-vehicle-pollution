@@ -1321,7 +1321,7 @@ async def auth(request: Request) -> Dict[str, Any]:
     """
     HTTP endpoint:
       POST application/json with:
-        - action: signup|login|google|session|logout|update_profile|update_password|get_user
+        - action: signup|login|google|session|logout|update_profile|update_password|get_user|list_reports
         - token: string (required for session-bound actions)
         - payload fields for each action
     Persists sessions in a Modal volume and users in Snowflake.
@@ -1495,6 +1495,24 @@ async def auth(request: Request) -> Dict[str, Any]:
                     return {"ok": False, "message": "User record not found."}
                 response = {"ok": True, "user": _auth_public_user(found)}
 
+            elif action == "list_reports":
+                token = str(body.get("token", "")).strip()
+                requester = _auth_get_user_from_token(users, sessions, token, conn=conn)
+                if not requester:
+                    return {"ok": False, "message": "You need to be logged in."}
+                if str(requester.get("role", "resident")) != "admin":
+                    return {"ok": False, "message": "Admin access required."}
+
+                reports = _read_json_file(REPORTS_FILE, [])
+                if not isinstance(reports, list):
+                    reports = []
+                reports_sorted = sorted(
+                    reports,
+                    key=lambda r: str(r.get("created_at") or r.get("timestamp") or ""),
+                    reverse=True,
+                )
+                response = {"ok": True, "reports": reports_sorted}
+
             else:
                 return {"ok": False, "message": f"Unsupported action '{action}'."}
 
@@ -1586,61 +1604,6 @@ async def submit_resident_report(request: Request) -> Dict[str, Any]:
     await auth_vol.commit.aio()
 
     return {"ok": True, "report": report}
-
-
-@app.function(volumes={AUTH_DIR: auth_vol}, secrets=[snowflake_secret])
-@modal.fastapi_endpoint(method="POST")
-async def list_reports(request: Request) -> Dict[str, Any]:
-    """
-    HTTP endpoint:
-      POST application/json with:
-        - token: auth session token
-    Returns all resident reports for admin users.
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        return {"ok": False, "message": "Invalid JSON body."}
-
-    token = str((body or {}).get("token") or "").strip()
-    if not token:
-        return {"ok": False, "message": "Missing session token."}
-
-    conn = None
-    try:
-        conn = _snowflake_connect()
-        _auth_ensure_users_table(conn)
-    except Exception as exc:
-        return {"ok": False, "message": f"Auth backend unavailable: {exc}"}
-
-    changed = False
-    user = None
-    reports_sorted: List[Dict[str, Any]] = []
-    with _auth_lock:
-        users, sessions = _auth_load_state()
-        changed = _auth_prune_sessions(sessions)
-        user = _auth_get_user_from_token(users, sessions, token, conn=conn)
-        if user and str(user.get("role", "resident")) == "admin":
-            reports = _read_json_file(REPORTS_FILE, [])
-            if not isinstance(reports, list):
-                reports = []
-            reports_sorted = sorted(
-                reports,
-                key=lambda r: str(r.get("created_at") or r.get("timestamp") or ""),
-                reverse=True,
-            )
-        if changed:
-            _auth_save_state(users, sessions)
-    if conn is not None:
-        conn.close()
-    if changed:
-        await auth_vol.commit.aio()
-    if not user:
-        return {"ok": False, "message": "You need to be logged in."}
-    if str(user.get("role", "resident")) != "admin":
-        return {"ok": False, "message": "Admin access required."}
-
-    return {"ok": True, "reports": reports_sorted}
 
 
 @app.function(volumes={VIDEO_DIR: vol, AUTH_DIR: auth_vol}, secrets=[snowflake_secret])
