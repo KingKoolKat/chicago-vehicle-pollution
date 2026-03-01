@@ -31,7 +31,7 @@ snowflake_secret = modal.Secret.from_name("SNOWFLAKE")
 # Persistent storage for uploaded media files (videos + images).
 vol = modal.Volume.from_name("ecotrack-videos", create_if_missing=True)
 VIDEO_DIR = "/data"
-DEFAULT_SEARCH_LIMIT = int(os.getenv("SNOWFLAKE_RAG_TOP_K", "5"))
+DEFAULT_SEARCH_LIMIT = int(os.getenv("SNOWFLAKE_RAG_TOP_K", "15"))
 DEFAULT_CHAT_MODEL = os.getenv("SNOWFLAKE_CHAT_MODEL", "mistral-large2")
 DEFAULT_SEARCH_COLUMNS = ["content", "source_url", "doc_id", "chunk_id"]
 CAMERAS_TABLE = os.getenv("SNOWFLAKE_CAMERAS_TABLE", "CAMERAS")
@@ -92,17 +92,19 @@ def _query_rows(conn, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
     return [dict(zip(cols, row)) for row in rows]
 
 
-def _format_rows(title: str, rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    if not rows:
-        return None
-
-    lines = [title]
-    for row in rows:
+def _rows_to_contexts(title: str, rows: List[Dict[str, Any]], max_rows: int = 20) -> List[Dict[str, Any]]:
+    contexts: List[Dict[str, Any]] = []
+    for idx, row in enumerate(rows[:max_rows], start=1):
         pairs = [f"{k}={v}" for k, v in row.items() if v is not None]
-        if pairs:
-            lines.append(f"- {', '.join(pairs)}")
-
-    return {"content": "\n".join(lines), "source_url": f"SNOWFLAKE:{title}"}
+        if not pairs:
+            continue
+        contexts.append(
+            {
+                "content": f"{title} row {idx}: " + ", ".join(pairs),
+                "source_url": f"SNOWFLAKE:{title}",
+            }
+        )
+    return contexts
 
 
 def _get_structured_context(conn, question: str) -> List[Dict[str, Any]]:
@@ -130,9 +132,7 @@ def _get_structured_context(conn, question: str) -> List[Dict[str, Any]]:
         LIMIT 15
         """,
     )
-    recent_context = _format_rows("RECENT_CAMERA_INFO", recent_rows)
-    if recent_context:
-        contexts.append(recent_context)
+    contexts.extend(_rows_to_contexts("RECENT_CAMERA_INFO", recent_rows, max_rows=20))
 
     hotspot_rows = _query_rows(
         conn,
@@ -158,9 +158,43 @@ def _get_structured_context(conn, question: str) -> List[Dict[str, Any]]:
         LIMIT 5
         """,
     )
-    hotspot_context = _format_rows("POLLUTION_HOTSPOTS", hotspot_rows)
-    if hotspot_context:
-        contexts.append(hotspot_context)
+    contexts.extend(_rows_to_contexts("POLLUTION_HOTSPOTS", hotspot_rows, max_rows=10))
+
+    hourly_rows = _query_rows(
+        conn,
+        f"""
+        SELECT
+          c.camera_name,
+          DATE_PART('hour', ci.recorded_at) AS hour_of_day,
+          AVG(ci.car_count) AS avg_car_count,
+          AVG(ci.total_unique_vehicles) AS avg_total_unique_vehicles
+        FROM {CAMERA_INFO_TABLE} ci
+        JOIN {CAMERAS_TABLE} c ON c.camera_id = ci.camera_id
+        GROUP BY c.camera_name, DATE_PART('hour', ci.recorded_at)
+        ORDER BY c.camera_name, hour_of_day
+        LIMIT 120
+        """,
+    )
+    contexts.extend(_rows_to_contexts("HOURLY_CAMERA_COUNTS", hourly_rows, max_rows=80))
+
+    downtown_night_rows = _query_rows(
+        conn,
+        f"""
+        SELECT
+          c.camera_name,
+          DATE_PART('hour', ci.recorded_at) AS hour_of_day,
+          AVG(ci.car_count) AS avg_car_count,
+          AVG(ci.total_unique_vehicles) AS avg_total_unique_vehicles
+        FROM {CAMERA_INFO_TABLE} ci
+        JOIN {CAMERAS_TABLE} c ON c.camera_id = ci.camera_id
+        WHERE LOWER(c.camera_name) LIKE '%%downtown%%'
+          AND (DATE_PART('hour', ci.recorded_at) >= 20 OR DATE_PART('hour', ci.recorded_at) < 6)
+        GROUP BY c.camera_name, DATE_PART('hour', ci.recorded_at)
+        ORDER BY hour_of_day
+        LIMIT 30
+        """,
+    )
+    contexts.extend(_rows_to_contexts("DOWNTOWN_NIGHT_HOURLY", downtown_night_rows, max_rows=30))
 
     rag_rows = _query_rows(
         conn,
@@ -174,9 +208,7 @@ def _get_structured_context(conn, question: str) -> List[Dict[str, Any]]:
         LIMIT 15
         """,
     )
-    rag_context = _format_rows("RAG_DOCUMENTS", rag_rows)
-    if rag_context:
-        contexts.append(rag_context)
+    contexts.extend(_rows_to_contexts("RAG_DOCUMENTS", rag_rows, max_rows=30))
 
     return contexts
 
@@ -448,8 +480,11 @@ def _complete_with_context(conn, question: str, contexts: List[Dict[str, Any]]) 
 
     prompt = (
         "You are an environmental assistant for Chicago vehicle pollution analysis.\n"
-        "Use ONLY the context below. If the answer is not present in context, say you do not know.\n"
-        "Keep the answer concise and include source bracket ids such as [1], [2] when relevant.\n\n"
+        "Provide detailed, structured answers with clear reasoning and practical interpretation.\n"
+        "Primary source of truth is the context below; prioritize it and cite source bracket ids such as [1], [2].\n"
+        "If context is incomplete, you may add brief general domain knowledge, but label it explicitly as 'General context' and do not present it as measured local data.\n"
+        "When asked for trends/comparisons, include supporting numbers when available and call out uncertainty or missing data explicitly.\n"
+        "Use short sections when helpful (for example: Summary, Key Findings, and Limitations).\n\n"
         f"QUESTION:\n{question}\n\n"
         f"CONTEXT:\n{joined_context}"
     )
@@ -759,7 +794,12 @@ async def traffic_map(request: Request) -> Dict[str, Any]:
             conn.close()
 
 
-@app.function(secrets=[snowflake_secret])
+@app.function(
+    secrets=[snowflake_secret],
+    min_containers=1,      # keep one warm
+    max_containers=5,     # scale out under load
+    scaledown_window=100,  # keep warm for 5 min after traffic drops
+)
 @modal.fastapi_endpoint(method="POST")
 async def chat(request: Request) -> Dict[str, Any]:
     """
@@ -827,13 +867,30 @@ def main():
     print("Deployed. Use: modal deploy app.py")
 
 @app.function(secrets=[snowflake_secret])
-def test_snowflake_query():
+def test_search_complete():
     conn = _snowflake_connect()
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT CURRENT_ACCOUNT(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_WAREHOUSE()
+            WITH search_results AS (
+              SELECT LISTAGG(value:DOC_CONTENT::VARCHAR, '\n\n') AS context
+              FROM TABLE(FLATTEN(PARSE_JSON(
+                SNOWFLAKE.CORTEX.SEARCH_PREVIEW(
+                  'MY_MODAL_DB.PUBLIC.UNIVERSAL_SEARCH_SERVICE',
+                  '{"query":"compare truck pollution facts with my current camera counts","limit":15}'
+                )
+              ):results))
+            )
+            SELECT SNOWFLAKE.CORTEX.COMPLETE(
+              'mistral-large2',
+              CONCAT(
+                'Using the context provided, answer the user query.\n\n',
+                'CONTEXT:\n', (SELECT context FROM search_results), '\n\n',
+                'QUESTION: What is the relationship between the pollution data and my recent camera counts?'
+              )
+            ) AS response
             """)
-            print(cur.fetchone())
+            print(cur.fetchone()[0])
     finally:
         conn.close()
+

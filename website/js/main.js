@@ -1,6 +1,7 @@
 document.body.insertAdjacentHTML('afterbegin', createNavigation());
 const CHAT_API_URL = window.CHAT_API_URL || '/chat';
 const CHAT_TEST_MODE = window.CHAT_TEST_MODE === true;
+const CHAT_TOP_K = Number(window.CHAT_TOP_K || 15);
 const TRAFFIC_MAP_API_URL = window.TRAFFIC_MAP_API_URL || '/traffic_map';
 const isHomePage = window.location.pathname === '/' || window.location.pathname.endsWith('/index.html');
 let sectionsReadyPromise = Promise.resolve();
@@ -724,16 +725,6 @@ async function sendMessage() {
         const response = await fetchRagResponse(message);
         removeTyping();
         addMessage(response.answer || "I don't have enough context to answer that.", 'bot');
-        if (typeof response.retrieved_chunks !== 'undefined') {
-            addMessage(`Retrieved chunks: ${response.retrieved_chunks}`, 'bot');
-        }
-
-        if (response.citations && response.citations.length > 0) {
-            const refs = response.citations
-                .slice(0, 3)
-                .map((c) => c.source_url || `${c.doc_id || 'doc'}:${c.chunk_id || 'chunk'}`);
-            addMessage(`Sources: ${refs.join(' | ')}`, 'bot');
-        }
     } catch (err) {
         removeTyping();
         if (CHAT_TEST_MODE) {
@@ -750,6 +741,63 @@ function quickAsk(question) {
     sendMessage();
 }
 
+function escapeHtml(text) {
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function normalizeModelText(text) {
+    if (text === null || typeof text === 'undefined') return '';
+    let normalized = String(text).trim();
+
+    // If model output is a JSON-encoded string, decode it.
+    if (
+        (normalized.startsWith('"') && normalized.endsWith('"')) ||
+        (normalized.startsWith("'") && normalized.endsWith("'"))
+    ) {
+        try {
+            const doubleQuoted = normalized.startsWith("'")
+                ? `"${normalized.slice(1, -1).replace(/"/g, '\\"')}"`
+                : normalized;
+            normalized = JSON.parse(doubleQuoted);
+        } catch (e) {
+            normalized = normalized.slice(1, -1);
+        }
+    }
+
+    // Convert escaped newlines/tabs to actual characters.
+    normalized = normalized
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t')
+        .replace(/\\"/g, '"');
+
+    return normalized.trim();
+}
+
+function formatMessageText(text) {
+    const safe = escapeHtml(normalizeModelText(text));
+    const withBold = safe.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    const lines = withBold.split('\n');
+    const bulletLikeLines = lines
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('- ') || /^\d+\.\s+/.test(line));
+
+    if (bulletLikeLines.length >= 2) {
+        const items = bulletLikeLines
+            .map((line) => line.replace(/^- /, '').replace(/^\d+\.\s+/, '').trim())
+            .filter(Boolean);
+        if (items.length > 0) {
+            return `<ul class="list-disc pl-5 space-y-1">${items.map((item) => `<li>${item}</li>`).join('')}</ul>`;
+        }
+    }
+
+    return withBold.replace(/\n/g, '<br>');
+}
+
 function addMessage(text, sender) {
     const container = document.getElementById('chatContainer');
     const div = document.createElement('div');
@@ -759,9 +807,10 @@ function addMessage(text, sender) {
         ? '<div class="w-8 h-8 rounded-full bg-gray-600 flex-shrink-0 flex items-center justify-center"><i class="fas fa-user text-white text-xs"></i></div>'
         : '<div class="w-8 h-8 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 flex-shrink-0 flex items-center justify-center"><i class="fas fa-robot text-white text-xs"></i></div>';
     
+    const formattedText = formatMessageText(text);
     const bubble = sender === 'user'
-        ? '<div class="glass-panel rounded-2xl rounded-tr-none px-4 py-3 max-w-[80%] bg-blue-600/20 border-blue-500/30">' + text + '</div>'
-        : '<div class="glass-panel rounded-2xl rounded-tl-none px-4 py-3 max-w-[80%]">' + text + '</div>';
+        ? '<div class="glass-panel rounded-2xl rounded-tr-none px-4 py-3 max-w-[80%] bg-blue-600/20 border-blue-500/30">' + formattedText + '</div>'
+        : '<div class="glass-panel rounded-2xl rounded-tl-none px-4 py-3 max-w-[80%]">' + formattedText + '</div>';
     
     div.innerHTML = avatar + bubble;
     container.appendChild(div);
@@ -793,12 +842,13 @@ function removeTyping() {
 }
 
 async function fetchRagResponse(question) {
+    const topK = Number.isFinite(CHAT_TOP_K) ? Math.max(1, Math.min(20, CHAT_TOP_K)) : 15;
     const res = await fetch(CHAT_API_URL, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ question })
+        body: JSON.stringify({ question, top_k: topK })
     });
     if (!res.ok) {
         throw new Error(`Chat request failed with status ${res.status}`);
