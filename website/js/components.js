@@ -67,3 +67,51 @@ function createNavigation() {
         </div>
     </nav>`;
 }
+
+function createFooter() {
+    const isHomePage = window.location.pathname === '/' || window.location.pathname.endsWith('/index.html');
+    const basePath = isHomePage ? '' : '../';
+    
+    return `
+    <footer class="glass-panel mt-20">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            
+            <!-- Single Row Layout -->
+            <div class="flex flex-wrap items-center justify-between gap-6">
+                
+                <!-- Logo -->
+                <div class="flex items-center gap-3">
+                    <img src="${basePath}image/favicon.png" alt="VanData" class="w-8 h-8 object-contain">
+                    <div>
+                        <span class="font-bold bg-gradient-to-r from-green-400 to-blue-400 bg-clip-text text-transparent">VanData</span>
+                        <span class="text-[10px] text-gray-500 ml-2">Pollution Intelligence</span>
+                    </div>
+                </div>
+
+                <!-- Team Pills -->
+                <div class="flex flex-wrap gap-2 text-[11px]">
+                    <span class="px-2 py-1 rounded-full bg-green-400/10 text-green-400/80 border border-green-400/20">Emiliano Escutia</span>
+                    <span class="px-2 py-1 rounded-full bg-blue-400/10 text-blue-400/80 border border-blue-400/20">Angel Moreno</span>
+                    <span class="px-2 py-1 rounded-full bg-purple-400/10 text-purple-400/80 border border-purple-400/20">Howard Su</span>
+                    <span class="px-2 py-1 rounded-full bg-yellow-400/10 text-yellow-400/80 border border-yellow-400/20">Jon Hogg</span>
+                </div>
+
+                <!-- Links -->
+                <div class="flex gap-4 text-xs text-gray-400">
+                    <a href="${isHomePage ? 'javascript:void(0)' : basePath}" onclick="${isHomePage ? 'scrollToSection(\'top\')' : ''}" class="hover:text-green-400 transition-colors">Dashboard</a>
+                    <a href="${isHomePage ? 'javascript:void(0)' : basePath + '?section=heatmap'}" onclick="${isHomePage ? 'scrollToSection(\'heatmap\')' : ''}" class="hover:text-green-400 transition-colors">Map</a>
+                    <a href="${basePath}upload/" class="hover:text-green-400 transition-colors">Upload</a>
+                </div>
+            </div>
+
+            <!-- Copyright Bar -->
+            <div class="mt-4 pt-3 border-t border-gray-700/30 flex justify-between items-center text-[10px] text-gray-600">
+                <span>&copy;2026 HackIllinois VanData</span>
+                <span class="flex items-center gap-1.5">
+                    <span class="w-1 h-1 rounded-full bg-green-400"></span>
+                    Operational
+                </span>
+            </div>
+        </div>
+    </footer>`;
+}

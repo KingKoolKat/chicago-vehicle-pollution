@@ -17,7 +17,9 @@
             <p class="text-gray-500 mb-6">Update your name, status, picture, and password.</p>
 
             <div class="flex items-center gap-4 mb-6">
-                <img id="profilePreview" src="../image/favicon.png" alt="Profile Preview" class="w-20 h-20 rounded-full object-cover border border-green-300">
+                <div id="profilePreview"
+                    class="w-20 h-20 rounded-full border border-green-300 flex items-center justify-center bg-green-300 text-gray-900 font-bold text-[2.8vw] overflow-hidden">
+                </div>
                 <div>
                     <div id="statusTag" class="inline-block px-3 py-1 rounded-full text-xs uppercase tracking-wide bg-green-100 text-green-800 mb-2">Resident</div>
                     <label class="block text-sm mb-1 text-gray-500" for="avatarFile">Upload Profile Picture</label>
@@ -78,7 +80,23 @@
         }
 
         function setPreview(src) {
-            document.getElementById("profilePreview").src = src || "../image/favicon.png";
+            const preview = document.getElementById("profilePreview");
+            const user = window.Auth.getSessionUser();
+
+            if (src) {
+                preview.innerHTML = `
+                    <img src="${src}" 
+                        alt="Profile" 
+                        class="w-full h-full object-cover">
+                `;
+            } else if (user) {
+                const initials = window.Auth.getInitials(user.name, user.email);
+                preview.innerHTML = `
+                    <span>${initials}</span>
+                `;
+            } else {
+                preview.innerHTML = `<span>?</span>`;
+            }
         }
 
         function loadProfile() {

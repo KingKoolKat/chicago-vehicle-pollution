@@ -1,4 +1,5 @@
 document.body.insertAdjacentHTML('afterbegin', createNavigation());
+document.body.insertAdjacentHTML('beforeend', createFooter());
 const CHAT_API_URL = window.CHAT_API_URL || '/chat';
 const CHAT_TOP_K = Number(window.CHAT_TOP_K || 25);
 const CHAT_TEST_MODE = window.CHAT_TEST_MODE === true;
