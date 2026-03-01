@@ -255,6 +255,43 @@
         return authRequest("list_reports", { token });
     }
 
+    async function deleteReport(report_id) {
+        const token = getStoredToken();
+        if (!token) {
+            return { ok: false, message: "You need to be logged in." };
+        }
+        return authRequest("delete_report", { token, report_id });
+    }
+
+    async function listCameras() {
+        const token = getStoredToken();
+        if (!token) {
+            return { ok: false, message: "You need to be logged in." };
+        }
+        return authRequest("list_cameras", { token });
+    }
+
+    async function createCamera({ camera_name, latitude, longitude }) {
+        const token = getStoredToken();
+        if (!token) {
+            return { ok: false, message: "You need to be logged in." };
+        }
+        return authRequest("create_camera", {
+            token,
+            camera_name: String(camera_name || "").trim(),
+            latitude,
+            longitude
+        });
+    }
+
+    async function deleteCamera(camera_id) {
+        const token = getStoredToken();
+        if (!token) {
+            return { ok: false, message: "You need to be logged in." };
+        }
+        return authRequest("delete_camera", { token, camera_id });
+    }
+
     async function getSessionUserCached(maxAgeMs = 15 * 60 * 1000) {
         const cached = getSessionUser();
         if (cached) return cached;
@@ -295,6 +332,10 @@
         getSessionToken,
         getFullUserById,
         listReports,
+        deleteReport,
+        listCameras,
+        createCamera,
+        deleteCamera,
         getInitials,
         upsertGoogleUser,
         updateProfile,

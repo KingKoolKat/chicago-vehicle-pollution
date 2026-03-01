@@ -39,12 +39,12 @@ VIDEO_DIR = "/data"
 auth_vol = modal.Volume.from_name("ecotrack-auth", create_if_missing=True)
 AUTH_DIR = "/authdata"
 AUTH_SESSIONS_FILE = os.path.join(AUTH_DIR, "sessions.json")
-REPORTS_FILE = os.path.join(AUTH_DIR, "reports.json")
 ADMIN_VIDEO_JOBS_FILE = os.path.join(AUTH_DIR, "admin_video_jobs.json")
 AUTH_PBKDF2_ITERATIONS = 120000
 AUTH_SALT_BYTES = 16
 AUTH_SESSION_TTL_SECONDS = 60 * 60 * 24 * 14
 AUTH_USERS_TABLE = os.getenv("SNOWFLAKE_USERS_TABLE", "MY_MODAL_DB.PUBLIC.USERS")
+REPORTS_TABLE = os.getenv("SNOWFLAKE_REPORTS_TABLE", "MY_MODAL_DB.PUBLIC.REPORTS")
 AUTH_GOOGLE_PASSWORD_SENTINEL = "google_oauth"
 _auth_lock = threading.Lock()
 DEFAULT_SEARCH_LIMIT = int(os.getenv("SNOWFLAKE_RAG_TOP_K", "25"))
@@ -297,7 +297,12 @@ def _find_nearest_camera_id(conn, lat: Optional[float], lng: Optional[float]) ->
     return _parse_int(rows[0].get("camera_id"))
 
 
-def _write_camera_info_record(conn, camera_id: Optional[int], out: Dict[str, Any]) -> None:
+def _write_camera_info_record(
+    conn,
+    camera_id: Optional[int],
+    out: Dict[str, Any],
+    recorded_at: Optional[str] = None,
+) -> None:
     if camera_id is None:
         return
 
@@ -315,9 +320,21 @@ def _write_camera_info_record(conn, camera_id: Optional[int], out: Dict[str, Any
             INSERT INTO {CAMERA_INFO_TABLE}
               (camera_id, car_count, bus_count, truck_count, motorcycle_count, total_unique_vehicles, peak_vehicles_per_frame, recorded_at)
             VALUES
-              (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP())
+              (%s, %s, %s, %s, %s, %s, %s, COALESCE(TRY_TO_TIMESTAMP(%s), CURRENT_TIMESTAMP()))
             """,
-            (camera_id, car_count, bus_count, truck_count, motorcycle_count, total_unique, peak),
+            (camera_id, car_count, bus_count, truck_count, motorcycle_count, total_unique, peak, recorded_at),
+        )
+
+
+def _delete_camera_info_for_date(conn, camera_id: int, recorded_date: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            DELETE FROM {CAMERA_INFO_TABLE}
+            WHERE camera_id = %s
+              AND DATE(recorded_at) = TO_DATE(%s)
+            """,
+            (camera_id, recorded_date),
         )
 
 
@@ -326,6 +343,8 @@ def _persist_detector_output(
     camera_id: Optional[int],
     lat: Optional[str],
     lng: Optional[str],
+    recorded_at: Optional[str] = None,
+    overwrite_for_date: Optional[str] = None,
 ) -> str:
     db_write_status = "skipped"
     conn = None
@@ -338,7 +357,10 @@ def _persist_detector_output(
             if camera_id is not None
             else _find_nearest_camera_id(conn, parsed_lat, parsed_lng)
         )
-        _write_camera_info_record(conn, resolved_camera_id, out)
+        clean_overwrite_date = _parse_date(overwrite_for_date)
+        if resolved_camera_id is not None and clean_overwrite_date:
+            _delete_camera_info_for_date(conn, int(resolved_camera_id), clean_overwrite_date)
+        _write_camera_info_record(conn, resolved_camera_id, out, recorded_at=recorded_at)
         db_write_status = "ok" if resolved_camera_id is not None else "no_camera_id"
     except Exception as exc:
         db_write_status = f"error: {exc}"
@@ -373,6 +395,13 @@ def _parse_date(value: Optional[str]) -> Optional[str]:
         return datetime.date.fromisoformat(value).isoformat()
     except ValueError:
         return None
+
+
+def _recorded_date_timestamp(value: Optional[str]) -> Optional[str]:
+    clean_date = _parse_date(value)
+    if not clean_date:
+        return None
+    return f"{clean_date} 12:00:00"
 
 
 def _traffic_level(intensity: float) -> str:
@@ -422,6 +451,90 @@ def _get_traffic_camera_rows(conn, selected_date: str) -> List[Dict[str, Any]]:
         """,
         (selected_date,),
     )
+
+
+def _get_all_camera_rows(conn) -> List[Dict[str, Any]]:
+    return _query_rows(
+        conn,
+        f"""
+        SELECT
+          camera_id,
+          camera_name,
+          latitude,
+          longitude
+        FROM {CAMERAS_TABLE}
+        ORDER BY camera_id ASC
+        """,
+    )
+
+
+def _camera_payload_from_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    camera_id = _to_int(row.get("camera_id"), 0)
+    return {
+        "camera_id": camera_id,
+        "camera_name": str(row.get("camera_name") or f"Camera {camera_id}"),
+        "latitude": _to_float(row.get("latitude")),
+        "longitude": _to_float(row.get("longitude")),
+    }
+
+
+def _list_camera_directory(conn) -> List[Dict[str, Any]]:
+    rows = _get_all_camera_rows(conn)
+    return [_camera_payload_from_row(row) for row in rows]
+
+
+def _next_camera_id(conn) -> int:
+    rows = _query_rows(
+        conn,
+        f"""
+        SELECT COALESCE(MAX(camera_id), 0) + 1 AS next_camera_id
+        FROM {CAMERAS_TABLE}
+        """,
+    )
+    if not rows:
+        return 1
+    return max(1, _to_int(rows[0].get("next_camera_id"), 1))
+
+
+def _create_camera_record(conn, name: str, latitude: float, longitude: float) -> Dict[str, Any]:
+    camera_id = _next_camera_id(conn)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO {CAMERAS_TABLE} (camera_id, camera_name, latitude, longitude)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (camera_id, str(name).strip(), float(latitude), float(longitude)),
+        )
+    conn.commit()
+
+    return {
+        "camera_id": camera_id,
+        "camera_name": str(name).strip(),
+        "latitude": float(latitude),
+        "longitude": float(longitude),
+    }
+
+
+def _delete_camera_record(conn, camera_id: int) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            DELETE FROM {CAMERA_INFO_TABLE}
+            WHERE camera_id = %s
+            """,
+            (camera_id,),
+        )
+        cur.execute(
+            f"""
+            DELETE FROM {CAMERAS_TABLE}
+            WHERE camera_id = %s
+            """,
+            (camera_id,),
+        )
+        removed_camera = (cur.rowcount or 0) > 0
+    conn.commit()
+    return removed_camera
 
 
 def _build_traffic_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -610,6 +723,187 @@ def _auth_ensure_users_table(conn) -> None:
             LIMIT 1
             """
         )
+
+
+def _report_key_expression(alias: str = "r") -> str:
+    prefix = f"{alias}." if alias else ""
+    return (
+        "COALESCE("
+        f"TO_VARCHAR({prefix}REPORT_ID), "
+        "SHA2("
+        "CONCAT_WS('|', "
+        f"COALESCE(TO_VARCHAR({prefix}CREATED_AT), ''), "
+        f"COALESCE(TO_VARCHAR({prefix}USER_ID), ''), "
+        f"COALESCE({prefix}DESCRIPTION, ''), "
+        f"COALESCE(TO_VARCHAR({prefix}CAR_COUNT), ''), "
+        f"COALESCE(TO_VARCHAR({prefix}BUS_COUNT), ''), "
+        f"COALESCE(TO_VARCHAR({prefix}TRUCK_COUNT), ''), "
+        f"COALESCE(TO_VARCHAR({prefix}MOTORCYCLE_COUNT), ''), "
+        f"COALESCE(TO_VARCHAR({prefix}TOTAL_VEHICLES), ''), "
+        f"COALESCE(TO_VARCHAR({prefix}LATITUDE), ''), "
+        f"COALESCE(TO_VARCHAR({prefix}LONGITUDE), '')"
+        "), 256)"
+        ")"
+    )
+
+
+def _reports_ensure_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {REPORTS_TABLE} (
+                REPORT_ID STRING,
+                CREATED_AT TIMESTAMP_NTZ,
+                DESCRIPTION STRING,
+                USER_ID STRING,
+                CAR_COUNT NUMBER(38, 0),
+                BUS_COUNT NUMBER(38, 0),
+                TRUCK_COUNT NUMBER(38, 0),
+                MOTORCYCLE_COUNT NUMBER(38, 0),
+                TOTAL_VEHICLES NUMBER(38, 0),
+                LATITUDE FLOAT,
+                LONGITUDE FLOAT
+            )
+            """
+        )
+        cur.execute(f"ALTER TABLE {REPORTS_TABLE} ADD COLUMN IF NOT EXISTS REPORT_ID STRING")
+        cur.execute(f"ALTER TABLE {REPORTS_TABLE} ADD COLUMN IF NOT EXISTS CREATED_AT TIMESTAMP_NTZ")
+
+
+def _report_payload_from_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    report_id = str(row.get("report_id") or "")
+    created_at = str(row.get("created_at") or "")
+    user_id = str(row.get("user_id") or "")
+    user_name = str(row.get("user_name") or "").strip()
+    user_email = str(row.get("user_email") or "").strip()
+    description = str(row.get("description") or "").strip()
+    car_count = _to_int(row.get("car_count"))
+    bus_count = _to_int(row.get("bus_count"))
+    truck_count = _to_int(row.get("truck_count"))
+    motorcycle_count = _to_int(row.get("motorcycle_count"))
+    total_vehicles = _to_int(row.get("total_vehicles"))
+    latitude = _to_float(row.get("latitude"))
+    longitude = _to_float(row.get("longitude"))
+
+    return {
+        "id": report_id,
+        "report_id": report_id,
+        "created_at": created_at,
+        "timestamp": created_at,
+        "user_id": user_id,
+        "user_name": user_name,
+        "user_email": user_email,
+        "description": description,
+        "notes": description,
+        "lat": latitude,
+        "lng": longitude,
+        "latitude": latitude,
+        "longitude": longitude,
+        "car_count": car_count,
+        "bus_count": bus_count,
+        "truck_count": truck_count,
+        "motorcycle_count": motorcycle_count,
+        "total_vehicles": total_vehicles,
+        "stats": {
+            "counts_by_class": {
+                "car": car_count,
+                "bus": bus_count,
+                "truck": truck_count,
+                "motorcycle": motorcycle_count,
+            },
+            "total_unique_vehicles": total_vehicles,
+            "peak_vehicles_in_frame": total_vehicles,
+        },
+    }
+
+
+def _list_resident_reports(conn) -> List[Dict[str, Any]]:
+    _reports_ensure_table(conn)
+    report_key = _report_key_expression("r")
+    rows = _query_rows(
+        conn,
+        f"""
+        SELECT
+          {report_key} AS report_id,
+          TO_VARCHAR(r.created_at) AS created_at,
+          TO_VARCHAR(r.user_id) AS user_id,
+          u.username AS user_name,
+          u.email AS user_email,
+          r.description AS description,
+          r.car_count AS car_count,
+          r.bus_count AS bus_count,
+          r.truck_count AS truck_count,
+          r.motorcycle_count AS motorcycle_count,
+          r.total_vehicles AS total_vehicles,
+          r.latitude AS latitude,
+          r.longitude AS longitude
+        FROM {REPORTS_TABLE} r
+        LEFT JOIN {AUTH_USERS_TABLE} u
+          ON TO_VARCHAR(u.user_id) = TO_VARCHAR(r.user_id)
+        ORDER BY COALESCE(r.created_at, CURRENT_TIMESTAMP()) DESC
+        """,
+    )
+    return [_report_payload_from_row(row) for row in rows]
+
+
+def _insert_resident_report(
+    conn,
+    *,
+    report_id: str,
+    created_at: str,
+    user_id: str,
+    description: str,
+    car_count: int,
+    bus_count: int,
+    truck_count: int,
+    motorcycle_count: int,
+    total_vehicles: int,
+    latitude: float,
+    longitude: float,
+) -> None:
+    _reports_ensure_table(conn)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO {REPORTS_TABLE}
+              (report_id, created_at, description, user_id, car_count, bus_count, truck_count, motorcycle_count, total_vehicles, latitude, longitude)
+            VALUES
+              (%s, COALESCE(TRY_TO_TIMESTAMP(%s), CURRENT_TIMESTAMP()), %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                str(report_id),
+                str(created_at),
+                str(description),
+                str(user_id),
+                int(car_count),
+                int(bus_count),
+                int(truck_count),
+                int(motorcycle_count),
+                int(total_vehicles),
+                float(latitude),
+                float(longitude),
+            ),
+        )
+    conn.commit()
+
+
+def _delete_resident_report(conn, report_id: str) -> bool:
+    clean_report_id = str(report_id or "").strip()
+    if not clean_report_id:
+        return False
+    _reports_ensure_table(conn)
+    report_key = _report_key_expression("")
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            DELETE FROM {REPORTS_TABLE}
+            WHERE {report_key} = %s
+            """,
+            (clean_report_id,),
+        )
+        deleted = (cur.rowcount or 0) > 0
+    conn.commit()
+    return deleted
 
 
 def _auth_db_get_user_by_email(conn, email: str) -> Optional[Dict[str, Any]]:
@@ -1108,8 +1402,11 @@ async def batch_upload_and_count(request: Request) -> Dict[str, Any]:
         - files: one or more video files (repeat this key for multiple files)
         - speed_mode: "standard" | "fast" (optional, default "standard")
         - max_parallel: int (optional, default env or 4)
+        - overwrite_for_date: bool-like (optional; if true, clear existing rows for each camera/date pair before insert)
         - camera_id / lat / lng / timestamp:
           optional metadata; can be repeated to map by file index
+        - recorded_date:
+          optional YYYY-MM-DD (or repeated `recorded_dates`) to write deterministic dates
 
     Returns one result per video and aggregate totals.
     """
@@ -1134,6 +1431,13 @@ async def batch_upload_and_count(request: Request) -> Dict[str, Any]:
 
     requested_mode = str(form.get("speed_mode") or form.get("speed") or "standard").strip().lower()
     speed_mode = "fast" if requested_mode in {"fast", "faster"} else "standard"
+    overwrite_for_date = str(form.get("overwrite_for_date") or form.get("overwrite") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
 
     requested_parallel = _to_int(form.get("max_parallel"), default=BATCH_DEFAULT_PARALLEL)
     max_parallel = max(1, min(requested_parallel, BATCH_MAX_PARALLEL))
@@ -1142,6 +1446,12 @@ async def batch_upload_and_count(request: Request) -> Dict[str, Any]:
     lat_values = _form_values(form, "lat") or _form_values(form, "lats")
     lng_values = _form_values(form, "lng") or _form_values(form, "lngs")
     timestamp_values = _form_values(form, "timestamp") or _form_values(form, "timestamps")
+    recorded_date_values = (
+        _form_values(form, "recorded_date")
+        or _form_values(form, "recorded_dates")
+        or _form_values(form, "date")
+        or _form_values(form, "dates")
+    )
 
     # Save all files first, then commit once to reduce volume overhead.
     saved_files = await _save_upload_files(files, ".mp4")
@@ -1158,6 +1468,45 @@ async def batch_upload_and_count(request: Request) -> Dict[str, Any]:
         return_exceptions=True,
     )
 
+    per_file_metadata: List[Dict[str, Any]] = []
+    overwrite_pairs: set[tuple[int, str]] = set()
+    for idx, _saved in enumerate(saved_files):
+        camera_id = _parse_int(_pick_index_value(camera_values, idx))
+        lat = _pick_index_value(lat_values, idx)
+        lng = _pick_index_value(lng_values, idx)
+        timestamp = _pick_index_value(timestamp_values, idx)
+        recorded_date = _parse_date(_pick_index_value(recorded_date_values, idx))
+        recorded_at = _recorded_date_timestamp(recorded_date)
+
+        if overwrite_for_date and camera_id is not None and recorded_date:
+            overwrite_pairs.add((int(camera_id), recorded_date))
+
+        per_file_metadata.append(
+            {
+                "camera_id": camera_id,
+                "lat": lat,
+                "lng": lng,
+                "timestamp": timestamp,
+                "recorded_date": recorded_date,
+                "recorded_at": recorded_at,
+            }
+        )
+
+    if overwrite_for_date:
+        if not overwrite_pairs:
+            return {"error": "overwrite_for_date requires camera_id and recorded_date."}
+        conn = None
+        try:
+            conn = _snowflake_connect()
+            for camera_id, recorded_date in sorted(overwrite_pairs):
+                _delete_camera_info_for_date(conn, camera_id, recorded_date)
+            conn.commit()
+        except Exception as exc:
+            return {"error": f"Failed to clear existing records for overwrite_for_date: {exc}"}
+        finally:
+            if conn is not None:
+                conn.close()
+
     aggregate_counts = {
         "car": 0,
         "bus": 0,
@@ -1169,11 +1518,13 @@ async def batch_upload_and_count(request: Request) -> Dict[str, Any]:
     success_count = 0
     results: List[Dict[str, Any]] = []
 
-    for idx, (saved, output) in enumerate(zip(saved_files, raw_outputs)):
-        camera_id = _parse_int(_pick_index_value(camera_values, idx))
-        lat = _pick_index_value(lat_values, idx)
-        lng = _pick_index_value(lng_values, idx)
-        timestamp = _pick_index_value(timestamp_values, idx)
+    for idx, (saved, output, metadata) in enumerate(zip(saved_files, raw_outputs, per_file_metadata)):
+        camera_id = metadata["camera_id"]
+        lat = metadata["lat"]
+        lng = metadata["lng"]
+        timestamp = metadata["timestamp"]
+        recorded_date = metadata["recorded_date"]
+        recorded_at = metadata["recorded_at"]
 
         item_result: Dict[str, Any] = {
             "index": idx,
@@ -1183,6 +1534,7 @@ async def batch_upload_and_count(request: Request) -> Dict[str, Any]:
             "lat": lat,
             "lng": lng,
             "timestamp": timestamp,
+            "recorded_date": recorded_date,
         }
 
         if isinstance(output, Exception):
@@ -1191,7 +1543,13 @@ async def batch_upload_and_count(request: Request) -> Dict[str, Any]:
             results.append(item_result)
             continue
 
-        db_write_status = _persist_detector_output(output, camera_id, lat, lng)
+        db_write_status = _persist_detector_output(
+            output,
+            camera_id,
+            lat,
+            lng,
+            recorded_at=recorded_at,
+        )
         counts = output.get("counts_by_class", {}) or {}
 
         for vehicle_type in aggregate_counts:
@@ -1209,8 +1567,10 @@ async def batch_upload_and_count(request: Request) -> Dict[str, Any]:
 
     error_count = len(results) - success_count
     return {
+        "ok": True,
         "speed_mode": speed_mode,
         "max_parallel": max_parallel,
+        "overwrite_for_date": overwrite_for_date,
         "requested_file_count": len(files),
         "processed_file_count": len(results),
         "summary": {
@@ -1437,7 +1797,7 @@ async def auth(request: Request) -> Dict[str, Any]:
     """
     HTTP endpoint:
       POST application/json with:
-        - action: signup|login|google|session|logout|update_profile|update_password|get_user|list_reports
+        - action: signup|login|google|session|logout|update_profile|update_password|get_user|list_reports|delete_report|list_cameras|create_camera|delete_camera
         - token: string (required for session-bound actions)
         - payload fields for each action
     Persists sessions in a Modal volume and users in Snowflake.
@@ -1619,15 +1979,80 @@ async def auth(request: Request) -> Dict[str, Any]:
                 if str(requester.get("role", "resident")) != "admin":
                     return {"ok": False, "message": "Admin access required."}
 
-                reports = _read_json_file(REPORTS_FILE, [])
-                if not isinstance(reports, list):
-                    reports = []
-                reports_sorted = sorted(
-                    reports,
-                    key=lambda r: str(r.get("created_at") or r.get("timestamp") or ""),
-                    reverse=True,
-                )
-                response = {"ok": True, "reports": reports_sorted}
+                reports = _list_resident_reports(conn)
+                response = {"ok": True, "reports": reports}
+
+            elif action == "delete_report":
+                token = str(body.get("token", "")).strip()
+                requester = _auth_get_user_from_token(users, sessions, token, conn=conn)
+                if not requester:
+                    return {"ok": False, "message": "You need to be logged in."}
+                if str(requester.get("role", "resident")) != "admin":
+                    return {"ok": False, "message": "Admin access required."}
+
+                report_id = str(body.get("report_id") or body.get("id") or "").strip()
+                if not report_id:
+                    return {"ok": False, "message": "report_id is required."}
+
+                deleted = _delete_resident_report(conn, report_id)
+                if not deleted:
+                    return {"ok": False, "message": f"Report {report_id} was not found."}
+                reports = _list_resident_reports(conn)
+                response = {"ok": True, "report_id": report_id, "reports": reports}
+
+            elif action == "list_cameras":
+                token = str(body.get("token", "")).strip()
+                requester = _auth_get_user_from_token(users, sessions, token, conn=conn)
+                if not requester:
+                    return {"ok": False, "message": "You need to be logged in."}
+                if str(requester.get("role", "resident")) != "admin":
+                    return {"ok": False, "message": "Admin access required."}
+
+                cameras = _list_camera_directory(conn)
+                response = {"ok": True, "cameras": cameras}
+
+            elif action == "create_camera":
+                token = str(body.get("token", "")).strip()
+                requester = _auth_get_user_from_token(users, sessions, token, conn=conn)
+                if not requester:
+                    return {"ok": False, "message": "You need to be logged in."}
+                if str(requester.get("role", "resident")) != "admin":
+                    return {"ok": False, "message": "Admin access required."}
+
+                camera_name = str(body.get("camera_name") or body.get("name") or "").strip()
+                latitude = _to_float(body.get("latitude"))
+                longitude = _to_float(body.get("longitude"))
+
+                if not camera_name:
+                    return {"ok": False, "message": "camera_name is required."}
+                if latitude is None or longitude is None:
+                    return {"ok": False, "message": "Valid latitude and longitude are required."}
+                if latitude < -90 or latitude > 90:
+                    return {"ok": False, "message": "Latitude must be between -90 and 90."}
+                if longitude < -180 or longitude > 180:
+                    return {"ok": False, "message": "Longitude must be between -180 and 180."}
+
+                created = _create_camera_record(conn, camera_name, latitude, longitude)
+                cameras = _list_camera_directory(conn)
+                response = {"ok": True, "camera": created, "cameras": cameras}
+
+            elif action == "delete_camera":
+                token = str(body.get("token", "")).strip()
+                requester = _auth_get_user_from_token(users, sessions, token, conn=conn)
+                if not requester:
+                    return {"ok": False, "message": "You need to be logged in."}
+                if str(requester.get("role", "resident")) != "admin":
+                    return {"ok": False, "message": "Admin access required."}
+
+                camera_id = _parse_int(body.get("camera_id"))
+                if camera_id is None:
+                    return {"ok": False, "message": "camera_id is required."}
+
+                removed = _delete_camera_record(conn, camera_id)
+                if not removed:
+                    return {"ok": False, "message": f"Camera ID {camera_id} was not found."}
+                cameras = _list_camera_directory(conn)
+                response = {"ok": True, "camera_id": camera_id, "cameras": cameras}
 
             else:
                 return {"ok": False, "message": f"Unsupported action '{action}'."}
@@ -1644,14 +2069,22 @@ async def auth(request: Request) -> Dict[str, Any]:
 
 async def _submit_resident_report_from_form(form: Any) -> Dict[str, Any]:
     token = str(form.get("token") or "").strip()
-    notes = str(form.get("notes") or "").strip()
-    lat = form.get("lat")
-    lng = form.get("lng")
+    description = str(form.get("description") or form.get("notes") or "").strip()
+    lat = _to_float(form.get("lat"))
+    lng = _to_float(form.get("lng"))
     timestamp = str(form.get("timestamp") or "").strip() or _auth_now_iso()
     file = form.get("file")
 
     if not token:
         return {"ok": False, "message": "Missing session token."}
+    if not description:
+        return {"ok": False, "message": "Description is required."}
+    if lat is None or lng is None:
+        return {"ok": False, "message": "Latitude and longitude are required."}
+    if lat < -90 or lat > 90:
+        return {"ok": False, "message": "Latitude must be between -90 and 90."}
+    if lng < -180 or lng > 180:
+        return {"ok": False, "message": "Longitude must be between -180 and 180."}
     if file is None or not hasattr(file, "read"):
         return {"ok": False, "message": "Missing image file."}
 
@@ -1659,6 +2092,7 @@ async def _submit_resident_report_from_form(form: Any) -> Dict[str, Any]:
     try:
         conn = _snowflake_connect()
         _auth_ensure_users_table(conn)
+        _reports_ensure_table(conn)
     except Exception as exc:
         return {"ok": False, "message": f"Auth backend unavailable: {exc}"}
 
@@ -1669,55 +2103,82 @@ async def _submit_resident_report_from_form(form: Any) -> Dict[str, Any]:
         user = _auth_get_user_from_token(users, sessions, token, conn=conn)
         if session_state_changed:
             _auth_save_state(users, sessions)
-    if conn is not None:
-        conn.close()
     if session_state_changed:
         await auth_vol.commit.aio()
     if not user:
+        if conn is not None:
+            conn.close()
         return {"ok": False, "message": "You need to be logged in."}
 
-    suffix = _image_suffix(getattr(file, "filename", ""))
-    image_id, save_path = await _save_upload_file(file, suffix)
+    try:
+        suffix = _image_suffix(getattr(file, "filename", ""))
+        image_id, save_path = await _save_upload_file(file, suffix)
 
-    svc = CounterService()
-    stats = await svc.count_image.remote.aio(save_path, speed_mode="standard")
+        svc = CounterService()
+        stats = await svc.count_image.remote.aio(save_path, speed_mode="standard")
 
-    report = {
-        "id": str(uuid.uuid4()),
-        "created_at": _auth_now_iso(),
-        "timestamp": timestamp,
-        "user_id": user.get("id"),
-        "user_name": user.get("name"),
-        "user_email": user.get("email"),
-        "user_role": user.get("role", "resident"),
-        "notes": notes,
-        "lat": lat,
-        "lng": lng,
-        "image_id": image_id,
-        "image_filename": str(getattr(file, "filename", "") or ""),
-        "stats": stats,
-    }
+        counts = stats.get("counts_by_class", {}) or {}
+        car_count = int(counts.get("car", 0))
+        bus_count = int(counts.get("bus", 0))
+        truck_count = int(counts.get("truck", 0))
+        motorcycle_count = int(counts.get("motorcycle", 0))
+        total_vehicles = int(stats.get("total_unique_vehicles", 0))
 
-    with _auth_lock:
-        reports = _read_json_file(REPORTS_FILE, [])
-        if not isinstance(reports, list):
-            reports = []
-        reports.append(report)
-        _write_json_file(REPORTS_FILE, reports)
-    await auth_vol.commit.aio()
+        report_id = str(uuid.uuid4())
+        created_at = _auth_now_iso()
+        _insert_resident_report(
+            conn,
+            report_id=report_id,
+            created_at=created_at,
+            user_id=str(user.get("id") or ""),
+            description=description,
+            car_count=car_count,
+            bus_count=bus_count,
+            truck_count=truck_count,
+            motorcycle_count=motorcycle_count,
+            total_vehicles=total_vehicles,
+            latitude=float(lat),
+            longitude=float(lng),
+        )
 
-    return {"ok": True, "report": report}
+        report = {
+            "id": report_id,
+            "report_id": report_id,
+            "created_at": created_at,
+            "timestamp": timestamp,
+            "user_id": user.get("id"),
+            "user_name": user.get("name"),
+            "user_email": user.get("email"),
+            "user_role": user.get("role", "resident"),
+            "description": description,
+            "notes": description,
+            "lat": lat,
+            "lng": lng,
+            "latitude": lat,
+            "longitude": lng,
+            "car_count": car_count,
+            "bus_count": bus_count,
+            "truck_count": truck_count,
+            "motorcycle_count": motorcycle_count,
+            "total_vehicles": total_vehicles,
+            "image_id": image_id,
+            "image_filename": str(getattr(file, "filename", "") or ""),
+            "stats": stats,
+        }
+        return {"ok": True, "report": report}
+    except Exception as exc:
+        return {"ok": False, "message": f"Failed to process report: {exc}"}
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 async def _admin_process_video_from_form(form: Any) -> Dict[str, Any]:
     token = str(form.get("token") or "").strip()
     file = form.get("file")
     camera_id = _parse_int(form.get("camera_id"))
-    lat = form.get("lat")
-    lng = form.get("lng")
-    start_time = str(form.get("start_time") or "").strip()
-    end_time = str(form.get("end_time") or "").strip()
-    timestamp = end_time or str(form.get("timestamp") or "").strip() or _auth_now_iso()
+    recorded_date = _parse_date(str(form.get("recorded_date") or form.get("date") or "").strip())
+    recorded_at = _recorded_date_timestamp(recorded_date)
     speed_mode = str(form.get("speed_mode") or form.get("speed") or "standard").strip().lower()
 
     if not token:
@@ -1726,6 +2187,8 @@ async def _admin_process_video_from_form(form: Any) -> Dict[str, Any]:
         return {"ok": False, "message": "Missing video file."}
     if camera_id is None:
         return {"ok": False, "message": "camera_id is required."}
+    if not recorded_date or not recorded_at:
+        return {"ok": False, "message": "recorded_date is required in YYYY-MM-DD format."}
 
     conn = None
     try:
@@ -1755,7 +2218,14 @@ async def _admin_process_video_from_form(form: Any) -> Dict[str, Any]:
 
     svc = CounterService()
     out = await svc.count_video.remote.aio(save_path, speed_mode=speed_mode)
-    db_write_status = _persist_detector_output(out, camera_id, lat, lng)
+    db_write_status = _persist_detector_output(
+        out,
+        camera_id,
+        None,
+        None,
+        recorded_at=recorded_at,
+        overwrite_for_date=recorded_date,
+    )
 
     job = {
         "id": str(uuid.uuid4()),
@@ -1765,11 +2235,8 @@ async def _admin_process_video_from_form(form: Any) -> Dict[str, Any]:
         "video_id": video_id,
         "video_filename": str(getattr(file, "filename", "") or ""),
         "camera_id": camera_id,
-        "lat": lat,
-        "lng": lng,
-        "start_time": start_time or None,
-        "end_time": end_time or None,
-        "timestamp": timestamp,
+        "recorded_date": recorded_date,
+        "recorded_at": recorded_at,
         "db_write_status": db_write_status,
         "stats": out,
     }
