@@ -25,13 +25,13 @@ function createNavigation() {
                     <i class="fas fa-chevron-down text-xs"></i>
                 </button>
                 <div id="userMenuDropdown" class="hidden absolute right-0 mt-2 w-44 rounded-xl glass-panel border border-gray-700 shadow-lg p-2 z-50">
-                    <a href="${profileLink}" class="block px-3 py-2 rounded-lg text-sm hover:bg-gray-200">
+                    <a href="${profileLink}" class="block px-3 py-2 rounded-lg text-sm hover:bg-gray-200" data-i18n="nav.profile">
                         <i class="fas fa-user-gear mr-2"></i>Profile
                     </a>
-                    <a ${uploadAction} class="block px-3 py-2 rounded-lg text-sm hover:bg-gray-200">
+                    <a ${uploadAction} class="block px-3 py-2 rounded-lg text-sm hover:bg-gray-200" data-i18n="nav.upload">
                         <i class="fas fa-upload mr-2"></i>Upload
                     </a>
-                    <button id="logoutBtn" type="button" class="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-gray-200 text-red-500">
+                    <button id="logoutBtn" type="button" class="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-gray-200 text-red-500" data-i18n="nav.logout">
                         <i class="fas fa-right-from-bracket mr-2"></i>Log Out
                     </button>
                 </div>
@@ -84,7 +84,7 @@ function createFooter() {
                     <img src="${basePath}image/favicon.png" alt="VanData" class="w-8 h-8 object-contain">
                     <div>
                         <span class="font-bold bg-gradient-to-r from-green-400 to-blue-400 bg-clip-text text-transparent">VanData</span>
-                        <span class="text-[10px] text-gray-500 ml-2">Pollution Intelligence</span>
+                        <span class="text-[10px] text-gray-500 ml-2" data-i18n="footer.tagline">Pollution Intelligence</span>
                     </div>
                 </div>
 
@@ -98,19 +98,19 @@ function createFooter() {
 
                 <!-- Links -->
                 <div class="flex gap-4 text-xs text-gray-400">
-                    <a href="${isHomePage ? 'javascript:void(0)' : basePath}" onclick="${isHomePage ? 'scrollToSection(\'top\')' : ''}" class="hover:text-green-400 transition-colors">Dashboard</a>
-                    <a href="${isHomePage ? 'javascript:void(0)' : basePath + '?section=heatmap'}" onclick="${isHomePage ? 'scrollToSection(\'heatmap\')' : ''}" class="hover:text-green-400 transition-colors">Map</a>
-                    <a href="${basePath}upload/" class="hover:text-green-400 transition-colors">Upload</a>
+                    <a href="${isHomePage ? 'javascript:void(0)' : basePath}" onclick="${isHomePage ? 'scrollToSection(\'top\')' : ''}" class="hover:text-green-400 transition-colors" data-i18n="nav.dashboard">Dashboard</a>
+                    <a href="${isHomePage ? 'javascript:void(0)' : basePath + '?section=heatmap'}" onclick="${isHomePage ? 'scrollToSection(\'heatmap\')' : ''}" class="hover:text-green-400 transition-colors" data-i18n="footer.map">Map</a>
+                    <a href="${basePath}upload/" class="hover:text-green-400 transition-colors" data-i18n="footer.upload">Upload</a>
                 </div>
             </div>
 
             <!-- Copyright Bar -->
             <div class="mt-4 pt-3 border-t border-gray-700/30 flex justify-between items-center text-[10px] text-gray-600">
                 <span>&copy;2026 HackIllinois VanData</span>
-                <span class="flex items-center gap-1.5">
-                    <span class="w-1 h-1 rounded-full bg-green-400"></span>
-                    Operational
-                </span>
+                    <span class="flex items-center gap-1.5" data-i18n="footer.statusOperational">
+                        <span class="w-1 h-1 rounded-full bg-green-400"></span>
+                        Operational
+                    </span>
             </div>
         </div>
     </footer>`;

@@ -56,6 +56,24 @@ function applyTranslations(lang) {
             el.textContent = translations[lang][key];
         }
     });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.getAttribute('data-i18n-placeholder');
+        if (translations[lang] && translations[lang][key]) {
+            el.setAttribute('placeholder', translations[lang][key]);
+        }
+    });
+    document.querySelectorAll('[data-i18n-title]').forEach(el => {
+        const key = el.getAttribute('data-i18n-title');
+        if (translations[lang] && translations[lang][key]) {
+            el.setAttribute('title', translations[lang][key]);
+        }
+    });
+    document.querySelectorAll('[data-i18n-aria-label]').forEach(el => {
+        const key = el.getAttribute('data-i18n-aria-label');
+        if (translations[lang] && translations[lang][key]) {
+            el.setAttribute('aria-label', translations[lang][key]);
+        }
+    });
 }
 
 function getSavedLanguage() {
