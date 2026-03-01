@@ -853,6 +853,8 @@ function setupDropZoneHandlers() {
 
 // Initialize
 window.onload = async function() {
+    requireAuthForUploadRoute();
+
     sectionsReadyPromise = injectSectionsOnHomePage();
     await sectionsReadyPromise;
     initUserMenu();
@@ -889,3 +891,21 @@ window.onload = async function() {
         truckCount.textContent = Math.floor(850 + Math.random() * 100);
     }, 5000);
 };
+
+function requireAuthForUploadRoute() {
+    // Normalize path (no trailing slash)
+    const path = window.location.pathname.replace(/\/$/, '');
+
+    const isUploadRoute = path === '/upload' || path.startsWith('/upload/');
+    if (!isUploadRoute) return;
+
+    const currentUser = window.Auth ? window.Auth.getSessionUser() : null;
+    if (currentUser) return;
+
+    // Save full path + query + hash so we can return after login
+    const returnTo = window.location.pathname + window.location.search + window.location.hash;
+    sessionStorage.setItem('redirectAfterLogin', returnTo);
+
+    // Redirect to login (preserve your current login path convention)
+    window.location.href = '/login/';
+}
