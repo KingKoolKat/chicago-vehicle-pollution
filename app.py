@@ -47,7 +47,7 @@ AUTH_SALT_BYTES = 16
 AUTH_SESSION_TTL_SECONDS = 60 * 60 * 24 * 14
 _auth_lock = threading.Lock()
 DEFAULT_SEARCH_LIMIT = int(os.getenv("SNOWFLAKE_RAG_TOP_K", "5"))
-DEFAULT_CHAT_MODEL = os.getenv("SNOWFLAKE_CHAT_MODEL", "snowflake-arctic")
+DEFAULT_CHAT_MODEL = os.getenv("SNOWFLAKE_CHAT_MODEL", "mistral-large2")
 DEFAULT_SEARCH_COLUMNS = ["content", "source_url", "doc_id", "chunk_id"]
 CAMERAS_TABLE = os.getenv("SNOWFLAKE_CAMERAS_TABLE", "CAMERAS")
 CAMERA_INFO_TABLE = os.getenv("SNOWFLAKE_CAMERA_INFO_TABLE", "CAMERA_INFO")
@@ -1572,3 +1572,15 @@ async def admin_process_video(request: Request) -> Dict[str, Any]:
 @app.local_entrypoint()
 def main():
     print("Deployed. Use: modal deploy app.py")
+
+@app.function(secrets=[snowflake_secret])
+def test_snowflake_query():
+    conn = _snowflake_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT CURRENT_ACCOUNT(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_WAREHOUSE()
+            """)
+            print(cur.fetchone())
+    finally:
+        conn.close()
