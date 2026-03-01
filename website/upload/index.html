@@ -178,7 +178,6 @@
     <script src="../js/main.js"></script>
     <script>
         const RESIDENT_REPORT_API_URL = window.RESIDENT_REPORT_API_URL || "/submit_resident_report";
-        const REPORTS_LIST_API_URL = window.REPORTS_LIST_API_URL || "/list_reports";
         const ADMIN_VIDEO_API_URL = window.ADMIN_VIDEO_API_URL || "/admin_process_video";
         const TRAFFIC_MAP_API_URL = window.TRAFFIC_MAP_API_URL || "/traffic_map";
 
@@ -363,14 +362,12 @@
 
             list.innerHTML = "<p class='text-gray-400'>Loading reports...</p>";
             try {
-                const res = await fetch(REPORTS_LIST_API_URL, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ token })
-                });
-                const data = await res.json();
-                if (!res.ok || !data.ok) {
-                    throw new Error(data.message || `Request failed with status ${res.status}`);
+                if (!window.Auth || typeof window.Auth.listReports !== "function") {
+                    throw new Error("Auth client missing listReports().");
+                }
+                const data = await window.Auth.listReports();
+                if (!data.ok) {
+                    throw new Error(data.message || "Request failed.");
                 }
 
                 const reports = Array.isArray(data.reports) ? data.reports : [];

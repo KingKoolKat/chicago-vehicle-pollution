@@ -1,4 +1,5 @@
 (function () {
+    const DEPLOYED_AUTH_API_URL = "https://kingkoolkat--ecotrack-inference-auth.modal.run";
     const LOCAL_AUTH_API_URL = "http://127.0.0.1:8001/auth";
     const SESSION_TOKEN_KEY = "ecotrack_session_token_v1";
     const SESSION_USER_KEY = "ecotrack_session_user_v1";
@@ -21,6 +22,8 @@
         return uniq([
             window.AUTH_API_URL,
             cached,
+            DEPLOYED_AUTH_API_URL,
+            "/auth",
             LOCAL_AUTH_API_URL,
             "http://localhost:8001/auth"
         ]);
@@ -121,7 +124,7 @@
             ok: false,
             message: nonOkResponses.length
                 ? `Auth server rejected requests. Responses: ${nonOkResponses.join(" | ")}. Tried: ${attempted.join(", ")}`
-                : `Unable to reach authentication server. Start local_auth_server.py first. Tried: ${attempted.join(", ")}`
+                : `Unable to reach authentication server. Set window.AUTH_API_URL if needed. Tried: ${attempted.join(", ")}`
         };
     }
 
@@ -198,6 +201,14 @@
         return result.ok ? sanitizeUser(result.user) : null;
     }
 
+    async function listReports() {
+        const token = getStoredToken();
+        if (!token) {
+            return { ok: false, message: "You need to be logged in." };
+        }
+        return authRequest("list_reports", { token });
+    }
+
     function logout() {
         const token = getStoredToken();
         clearStoredSession();
@@ -229,6 +240,7 @@
         getSessionUser,
         getSessionToken,
         getFullUserById,
+        listReports,
         getInitials,
         upsertGoogleUser,
         updateProfile,
