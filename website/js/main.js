@@ -1,5 +1,6 @@
 document.body.insertAdjacentHTML('afterbegin', createNavigation());
 const CHAT_API_URL = window.CHAT_API_URL || '/chat';
+const CHAT_TEST_MODE = window.CHAT_TEST_MODE === true;
 const TRAFFIC_MAP_API_URL = window.TRAFFIC_MAP_API_URL || '/traffic_map';
 const isHomePage = window.location.pathname === '/' || window.location.pathname.endsWith('/index.html');
 let sectionsReadyPromise = Promise.resolve();
@@ -723,6 +724,9 @@ async function sendMessage() {
         const response = await fetchRagResponse(message);
         removeTyping();
         addMessage(response.answer || "I don't have enough context to answer that.", 'bot');
+        if (typeof response.retrieved_chunks !== 'undefined') {
+            addMessage(`Retrieved chunks: ${response.retrieved_chunks}`, 'bot');
+        }
 
         if (response.citations && response.citations.length > 0) {
             const refs = response.citations
@@ -732,6 +736,10 @@ async function sendMessage() {
         }
     } catch (err) {
         removeTyping();
+        if (CHAT_TEST_MODE) {
+            addMessage(`Backend error: ${err.message}`, 'bot');
+            return;
+        }
         const fallback = generateAIResponse(message);
         addMessage(fallback, 'bot');
     }
