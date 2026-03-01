@@ -1,0 +1,10 @@
+{
+  "jNzY5ySGgRZ0qjV7S3-f-vlzx7QerbNuA4lLrrUkjUj-hCJh7IiY8neZ0VMSb53W": {
+    "user_id": "811027f3-bd3e-4f83-b2a6-eef02dd4dae9",
+    "expires_at": "2026-03-15T03:24:55Z"
+  },
+  "AeznnVIB-TrlYx6l6Ux2gy7Uq3Q6H5ZyeTYb4k5-QJ7iPA0vrUPV4VHhC5zewXBf": {
+    "user_id": "sub123",
+    "expires_at": "2026-03-15T03:24:55Z"
+  }
+}

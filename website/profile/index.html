@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoTrack - Profile</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="icon" href="../image/favicon.png" type="image/x-icon">
+    <link rel="stylesheet" href="../css/styles.css">
+    <link rel="stylesheet" href="../css/mobile.css">
+</head>
+<body class="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900">
+    <section class="pt-28 pb-16 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+        <div class="max-w-3xl mx-auto glass-panel rounded-3xl p-8 border border-green-500/20">
+            <h1 class="text-3xl font-bold mb-2">Profile</h1>
+            <p class="text-gray-500 mb-6">Update your name, status, picture, and password.</p>
+
+            <div class="flex items-center gap-4 mb-6">
+                <img id="profilePreview" src="../image/favicon.png" alt="Profile Preview" class="w-20 h-20 rounded-full object-cover border border-green-300">
+                <div>
+                    <div id="statusTag" class="inline-block px-3 py-1 rounded-full text-xs uppercase tracking-wide bg-green-100 text-green-800 mb-2">Resident</div>
+                    <label class="block text-sm mb-1 text-gray-500" for="avatarFile">Upload Profile Picture</label>
+                    <input id="avatarFile" type="file" accept="image/*" class="text-sm">
+                </div>
+            </div>
+
+            <form id="profileForm" class="space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-500 mb-1" for="profileName">Name</label>
+                    <input id="profileName" type="text" required class="w-full rounded-lg bg-gray-200 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-500 mb-1" for="profileEmail">Email</label>
+                    <input id="profileEmail" type="email" disabled class="w-full rounded-lg bg-gray-200 border border-gray-600 px-4 py-3">
+                </div>
+
+                <div id="passwordSection" class="rounded-2xl p-4 bg-blue-100/70 border border-blue-300">
+                    <h2 class="text-lg font-semibold mb-2">Change Password</h2>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-sm text-gray-500 mb-1" for="currentPassword">Current Password</label>
+                            <input id="currentPassword" type="password" class="w-full rounded-lg bg-white border border-blue-300 px-4 py-3 focus:outline-none focus:border-green-400">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-500 mb-1" for="newPassword">New Password</label>
+                            <input id="newPassword" type="password" minlength="8" class="w-full rounded-lg bg-white border border-blue-300 px-4 py-3 focus:outline-none focus:border-green-400">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-500 mb-1" for="confirmPassword">Confirm New Password</label>
+                            <input id="confirmPassword" type="password" minlength="8" class="w-full rounded-lg bg-white border border-blue-300 px-4 py-3 focus:outline-none focus:border-green-400">
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" class="w-full py-3 rounded-lg bg-gradient-to-r from-green-500 to-blue-600 font-semibold hover:shadow-lg transition-all">
+                    <i class="fas fa-floppy-disk mr-2"></i>Save Changes
+                </button>
+            </form>
+            <p id="profileStatus" class="text-sm mt-4 hidden"></p>
+        </div>
+    </section>
+
+    <script src="../js/auth.js"></script>
+    <script src="../js/translation.js"></script>
+    <script src="../js/components.js"></script>
+    <script src="../js/main.js"></script>
+    <script>
+        const sessionUser = window.Auth ? window.Auth.getSessionUser() : null;
+        if (!sessionUser) {
+            window.location.href = "../login/";
+        }
+        const isLocalAccount = (sessionUser && (sessionUser.provider || "local") === "local");
+
+        let uploadedAvatarDataUrl = "";
+
+        function setStatus(id, message, isError) {
+            const el = document.getElementById(id);
+            el.textContent = message;
+            el.className = `text-sm mt-4 ${isError ? "text-red-500" : "text-green-700"}`;
+            el.classList.remove("hidden");
+        }
+
+        function setPreview(src) {
+            document.getElementById("profilePreview").src = src || "../image/favicon.png";
+        }
+
+        function loadProfile() {
+            const user = window.Auth.getSessionUser();
+            if (!user) return;
+            document.getElementById("passwordSection").classList.toggle("hidden", !isLocalAccount);
+            document.getElementById("profileName").value = user.name || "";
+            document.getElementById("profileEmail").value = user.email || "";
+            document.getElementById("profileAvatarUrl").value = user.avatarUrl || "";
+            document.getElementById("profileRole").value = user.role || "resident";
+            setPreview(user.avatarUrl);
+            document.getElementById("statusTag").textContent = user.role === "admin" ? "Admin" : "Resident";
+        }
+
+        document.getElementById("avatarFile").addEventListener("change", (event) => {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = () => {
+                uploadedAvatarDataUrl = String(reader.result || "");
+                setPreview(uploadedAvatarDataUrl);
+            };
+            reader.readAsDataURL(file);
+        });
+
+        document.getElementById("profileForm").addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const name = document.getElementById("profileName").value;
+            const role = document.getElementById("profileRole").value;
+            const avatarUrlFromInput = document.getElementById("profileAvatarUrl").value.trim();
+            const avatarUrl = uploadedAvatarDataUrl || avatarUrlFromInput;
+
+            const result = await window.Auth.updateProfile({ name, role, avatarUrl });
+            if (!result.ok) {
+                setStatus("profileStatus", result.message, true);
+                return;
+            }
+
+            uploadedAvatarDataUrl = "";
+            setPreview(result.user.avatarUrl);
+            document.getElementById("statusTag").textContent = result.user.role === "admin" ? "Admin" : "Resident";
+
+            const currentPassword = document.getElementById("currentPassword").value;
+            const newPassword = document.getElementById("newPassword").value;
+            const confirmPassword = document.getElementById("confirmPassword").value;
+            const hasPasswordInput = isLocalAccount && (currentPassword || newPassword || confirmPassword);
+
+            if (hasPasswordInput) {
+                if (newPassword !== confirmPassword) {
+                    setStatus("profileStatus", "New passwords do not match.", true);
+                    return;
+                }
+
+                const passwordResult = await window.Auth.updatePassword({ currentPassword, newPassword });
+                if (!passwordResult.ok) {
+                    setStatus("profileStatus", passwordResult.message, true);
+                    return;
+                }
+            }
+
+            document.getElementById("currentPassword").value = "";
+            document.getElementById("newPassword").value = "";
+            document.getElementById("confirmPassword").value = "";
+            setStatus("profileStatus", hasPasswordInput ? "Profile and password updated successfully." : "Profile updated successfully.", false);
+        });
+
+        loadProfile();
+    </script>
+</body>
+</html>

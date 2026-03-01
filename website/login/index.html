@@ -112,11 +112,11 @@
         document.getElementById("showLoginBtn").addEventListener("click", () => setMode("login"));
         document.getElementById("showSignupBtn").addEventListener("click", () => setMode("signup"));
 
-        document.getElementById("loginForm").addEventListener("submit", (event) => {
+        document.getElementById("loginForm").addEventListener("submit", async (event) => {
             event.preventDefault();
             const email = document.getElementById("loginEmail").value;
             const password = document.getElementById("loginPassword").value;
-            const result = window.Auth.login({ email, password });
+            const result = await window.Auth.login({ email, password });
 
             if (!result.ok) {
                 showStatus(result.message, true);
@@ -127,7 +127,7 @@
             setTimeout(redirectToHome, 300);
         });
 
-        document.getElementById("signupForm").addEventListener("submit", (event) => {
+        document.getElementById("signupForm").addEventListener("submit", async (event) => {
             event.preventDefault();
             const name = document.getElementById("signupName").value;
             const email = document.getElementById("signupEmail").value;
@@ -139,7 +139,7 @@
                 return;
             }
 
-            const result = window.Auth.signUp({ name, email, password });
+            const result = await window.Auth.signUp({ name, email, password });
             if (!result.ok) {
                 showStatus(result.message, true);
                 return;
@@ -164,14 +164,14 @@
             }
         }
 
-        function handleGoogleCredential(response) {
+        async function handleGoogleCredential(response) {
             if (!response || !response.credential) {
                 showStatus("Google sign-in failed. Try again.", true);
                 return;
             }
 
             const profile = parseJwtCredential(response.credential);
-            const result = window.Auth.upsertGoogleUser(profile);
+            const result = await window.Auth.upsertGoogleUser(profile);
             if (!result.ok) {
                 showStatus(result.message, true);
                 return;

@@ -3,6 +3,10 @@ import json
 import uuid
 import datetime
 import asyncio
+import hashlib
+import hmac
+import secrets
+import threading
 from typing import Dict, Any, List, Optional, Tuple
 
 import modal
@@ -32,6 +36,16 @@ snowflake_secret = modal.Secret.from_name("SNOWFLAKE")
 # Persistent storage for uploaded media files (videos + images).
 vol = modal.Volume.from_name("ecotrack-videos", create_if_missing=True)
 VIDEO_DIR = "/data"
+auth_vol = modal.Volume.from_name("ecotrack-auth", create_if_missing=True)
+AUTH_DIR = "/authdata"
+AUTH_USERS_FILE = os.path.join(AUTH_DIR, "users.json")
+AUTH_SESSIONS_FILE = os.path.join(AUTH_DIR, "sessions.json")
+REPORTS_FILE = os.path.join(AUTH_DIR, "reports.json")
+ADMIN_VIDEO_JOBS_FILE = os.path.join(AUTH_DIR, "admin_video_jobs.json")
+AUTH_PBKDF2_ITERATIONS = 120000
+AUTH_SALT_BYTES = 16
+AUTH_SESSION_TTL_SECONDS = 60 * 60 * 24 * 14
+_auth_lock = threading.Lock()
 DEFAULT_SEARCH_LIMIT = int(os.getenv("SNOWFLAKE_RAG_TOP_K", "5"))
 DEFAULT_CHAT_MODEL = os.getenv("SNOWFLAKE_CHAT_MODEL", "snowflake-arctic")
 DEFAULT_SEARCH_COLUMNS = ["content", "source_url", "doc_id", "chunk_id"]
@@ -416,6 +430,125 @@ def _image_suffix(filename: Optional[str]) -> str:
     if ext in IMAGE_EXTENSIONS:
         return ext
     return ".jpg"
+
+
+def _read_json_file(path: str, default: Any) -> Any:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return default
+    except Exception:
+        return default
+
+
+def _write_json_file(path: str, value: Any) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(value, f, ensure_ascii=True, indent=2)
+
+
+def _auth_load_state() -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    users = _read_json_file(AUTH_USERS_FILE, [])
+    sessions = _read_json_file(AUTH_SESSIONS_FILE, {})
+    if not isinstance(users, list):
+        users = []
+    if not isinstance(sessions, dict):
+        sessions = {}
+    return users, sessions
+
+
+def _auth_save_state(users: List[Dict[str, Any]], sessions: Dict[str, Dict[str, Any]]) -> None:
+    _write_json_file(AUTH_USERS_FILE, users)
+    _write_json_file(AUTH_SESSIONS_FILE, sessions)
+
+
+def _auth_normalize_email(email: Any) -> str:
+    return str(email or "").strip().lower()
+
+
+def _auth_now_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _auth_make_hash(password: str, salt_hex: str) -> str:
+    derived = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        bytes.fromhex(salt_hex),
+        AUTH_PBKDF2_ITERATIONS,
+    )
+    return derived.hex()
+
+
+def _auth_new_password_record(password: str) -> Tuple[str, str]:
+    salt_hex = secrets.token_hex(AUTH_SALT_BYTES)
+    return salt_hex, _auth_make_hash(password, salt_hex)
+
+
+def _auth_public_user(user: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": user.get("id"),
+        "name": user.get("name", ""),
+        "email": user.get("email", ""),
+        "provider": user.get("provider", "local"),
+        "role": user.get("role", "resident"),
+        "avatarUrl": user.get("avatar_url", ""),
+    }
+
+
+def _auth_find_user_by_email(users: List[Dict[str, Any]], email: str) -> Tuple[int, Optional[Dict[str, Any]]]:
+    clean = _auth_normalize_email(email)
+    for idx, user in enumerate(users):
+        if _auth_normalize_email(user.get("email")) == clean:
+            return idx, user
+    return -1, None
+
+
+def _auth_find_user_by_id(users: List[Dict[str, Any]], user_id: str) -> Tuple[int, Optional[Dict[str, Any]]]:
+    for idx, user in enumerate(users):
+        if str(user.get("id")) == str(user_id):
+            return idx, user
+    return -1, None
+
+
+def _auth_prune_sessions(sessions: Dict[str, Dict[str, Any]]) -> bool:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    changed = False
+    for token in list(sessions.keys()):
+        raw_exp = sessions[token].get("expires_at")
+        try:
+            expires_at = datetime.datetime.fromisoformat(str(raw_exp).replace("Z", "+00:00"))
+        except Exception:
+            expires_at = None
+        if not expires_at or expires_at <= now:
+            sessions.pop(token, None)
+            changed = True
+    return changed
+
+
+def _auth_create_session(sessions: Dict[str, Dict[str, Any]], user_id: str) -> str:
+    token = secrets.token_urlsafe(48)
+    expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=AUTH_SESSION_TTL_SECONDS)
+    sessions[token] = {
+        "user_id": user_id,
+        "expires_at": expires.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    }
+    return token
+
+
+def _auth_get_user_from_token(
+    users: List[Dict[str, Any]],
+    sessions: Dict[str, Dict[str, Any]],
+    token: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    if not token:
+        return None
+    record = sessions.get(token)
+    if not record:
+        return None
+    _, user = _auth_find_user_by_id(users, str(record.get("user_id", "")))
+    return user
 
 
 def _form_values(form: Any, key: str) -> List[str]:
@@ -1031,6 +1164,409 @@ async def chat(request: Request) -> Dict[str, Any]:
     finally:
         if conn is not None:
             conn.close()
+
+
+@app.function(volumes={AUTH_DIR: auth_vol})
+@modal.fastapi_endpoint(method="POST")
+async def auth(request: Request) -> Dict[str, Any]:
+    """
+    HTTP endpoint:
+      POST application/json with:
+        - action: signup|login|google|session|logout|update_profile|update_password|get_user
+        - token: string (required for session-bound actions)
+        - payload fields for each action
+    Persists users/sessions in files on a Modal volume.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "message": "Invalid JSON body."}
+
+    action = str((body or {}).get("action", "")).strip().lower()
+    if not action:
+        return {"ok": False, "message": "Missing 'action'."}
+
+    should_commit = False
+
+    with _auth_lock:
+        users, sessions = _auth_load_state()
+        if _auth_prune_sessions(sessions):
+            should_commit = True
+
+        if action == "signup":
+            name = str(body.get("name", "")).strip()
+            email = _auth_normalize_email(body.get("email"))
+            password = str(body.get("password", "")).strip()
+
+            if not name:
+                return {"ok": False, "message": "Name is required."}
+            if not email or "@" not in email:
+                return {"ok": False, "message": "Valid email is required."}
+            if len(password) < 8:
+                return {"ok": False, "message": "Password must be at least 8 characters."}
+
+            _, existing = _auth_find_user_by_email(users, email)
+            if existing:
+                return {"ok": False, "message": "An account with this email already exists."}
+
+            salt_hex, password_hash = _auth_new_password_record(password)
+            user = {
+                "id": str(uuid.uuid4()),
+                "name": name,
+                "email": email,
+                "salt": salt_hex,
+                "password_hash": password_hash,
+                "role": "resident",
+                "avatar_url": "",
+                "provider": "local",
+                "created_at": _auth_now_iso(),
+            }
+            users.append(user)
+            token = _auth_create_session(sessions, user["id"])
+            _auth_save_state(users, sessions)
+            should_commit = True
+            response = {"ok": True, "user": _auth_public_user(user), "token": token}
+
+        elif action == "login":
+            email = _auth_normalize_email(body.get("email"))
+            password = str(body.get("password", "")).strip()
+            _, user = _auth_find_user_by_email(users, email)
+            if not user:
+                return {"ok": False, "message": "Incorrect email or password."}
+
+            if user.get("provider", "local") != "local":
+                return {"ok": False, "message": "Use Google sign-in for this account."}
+
+            salt_hex = str(user.get("salt", ""))
+            expected_hash = str(user.get("password_hash", ""))
+            provided_hash = _auth_make_hash(password, salt_hex) if salt_hex and expected_hash else ""
+            if not expected_hash or not hmac.compare_digest(provided_hash, expected_hash):
+                return {"ok": False, "message": "Incorrect email or password."}
+
+            token = _auth_create_session(sessions, str(user["id"]))
+            _auth_save_state(users, sessions)
+            should_commit = True
+            response = {"ok": True, "user": _auth_public_user(user), "token": token}
+
+        elif action == "google":
+            profile = body.get("profile") or {}
+            email = _auth_normalize_email(profile.get("email"))
+            if not email:
+                return {"ok": False, "message": "Google profile missing email."}
+
+            idx, user = _auth_find_user_by_email(users, email)
+            if user and user.get("provider") == "local":
+                return {"ok": False, "message": "Account exists with password. Log in with email/password."}
+
+            if not user:
+                user = {
+                    "id": str(profile.get("sub") or uuid.uuid4()),
+                    "name": str(profile.get("name") or email.split("@")[0]),
+                    "email": email,
+                    "salt": "",
+                    "password_hash": "",
+                    "role": "resident",
+                    "avatar_url": str(profile.get("picture") or ""),
+                    "provider": "google",
+                    "created_at": _auth_now_iso(),
+                }
+                users.append(user)
+            else:
+                users[idx]["provider"] = "google"
+                users[idx]["salt"] = ""
+                users[idx]["password_hash"] = ""
+                users[idx]["name"] = str(profile.get("name") or users[idx].get("name") or "")
+                users[idx]["avatar_url"] = str(profile.get("picture") or users[idx].get("avatar_url") or "")
+                user = users[idx]
+
+            token = _auth_create_session(sessions, str(user["id"]))
+            _auth_save_state(users, sessions)
+            should_commit = True
+            response = {"ok": True, "user": _auth_public_user(user), "token": token}
+
+        elif action == "session":
+            token = str(body.get("token", "")).strip()
+            user = _auth_get_user_from_token(users, sessions, token)
+            if not user:
+                return {"ok": False, "message": "Invalid session."}
+            response = {"ok": True, "user": _auth_public_user(user)}
+
+        elif action == "logout":
+            token = str(body.get("token", "")).strip()
+            if token and token in sessions:
+                sessions.pop(token, None)
+                _auth_save_state(users, sessions)
+                should_commit = True
+            response = {"ok": True}
+
+        elif action == "update_profile":
+            token = str(body.get("token", "")).strip()
+            user = _auth_get_user_from_token(users, sessions, token)
+            if not user:
+                return {"ok": False, "message": "You need to be logged in."}
+
+            clean_name = str(body.get("name", "")).strip()
+            if not clean_name:
+                return {"ok": False, "message": "Name is required."}
+            clean_role = "admin" if str(body.get("role", "")).strip().lower() == "admin" else "resident"
+            clean_avatar = str(body.get("avatarUrl", "")).strip()
+
+            idx, _ = _auth_find_user_by_id(users, str(user.get("id")))
+            if idx < 0:
+                return {"ok": False, "message": "User record not found."}
+
+            users[idx]["name"] = clean_name
+            users[idx]["role"] = clean_role
+            users[idx]["avatar_url"] = clean_avatar
+            _auth_save_state(users, sessions)
+            should_commit = True
+            response = {"ok": True, "user": _auth_public_user(users[idx])}
+
+        elif action == "update_password":
+            token = str(body.get("token", "")).strip()
+            user = _auth_get_user_from_token(users, sessions, token)
+            if not user:
+                return {"ok": False, "message": "You need to be logged in."}
+            if user.get("provider", "local") != "local":
+                return {"ok": False, "message": "Password changes are only available for local accounts."}
+
+            current_password = str(body.get("currentPassword", "")).strip()
+            new_password = str(body.get("newPassword", "")).strip()
+            if len(new_password) < 8:
+                return {"ok": False, "message": "New password must be at least 8 characters."}
+
+            salt_hex = str(user.get("salt", ""))
+            expected_hash = str(user.get("password_hash", ""))
+            provided_hash = _auth_make_hash(current_password, salt_hex) if salt_hex and expected_hash else ""
+            if not expected_hash or not hmac.compare_digest(provided_hash, expected_hash):
+                return {"ok": False, "message": "Current password is incorrect."}
+
+            next_salt, next_hash = _auth_new_password_record(new_password)
+            idx, _ = _auth_find_user_by_id(users, str(user.get("id")))
+            if idx < 0:
+                return {"ok": False, "message": "User record not found."}
+
+            users[idx]["salt"] = next_salt
+            users[idx]["password_hash"] = next_hash
+            _auth_save_state(users, sessions)
+            should_commit = True
+            response = {"ok": True, "user": _auth_public_user(users[idx])}
+
+        elif action == "get_user":
+            token = str(body.get("token", "")).strip()
+            requester = _auth_get_user_from_token(users, sessions, token)
+            if not requester:
+                return {"ok": False, "message": "You need to be logged in."}
+
+            user_id = str(body.get("userId", "")).strip()
+            _, found = _auth_find_user_by_id(users, user_id)
+            if not found:
+                return {"ok": False, "message": "User record not found."}
+            response = {"ok": True, "user": _auth_public_user(found)}
+
+        else:
+            return {"ok": False, "message": f"Unsupported action '{action}'."}
+
+    if should_commit:
+        await auth_vol.commit.aio()
+    return response
+
+
+@app.function(volumes={VIDEO_DIR: vol, AUTH_DIR: auth_vol})
+@modal.fastapi_endpoint(method="POST")
+async def submit_resident_report(request: Request) -> Dict[str, Any]:
+    """
+    HTTP endpoint:
+      POST multipart/form-data with:
+        - token: auth session token
+        - file: image
+        - notes: optional text
+        - lat/lng: optional
+        - timestamp: optional
+    Runs image model, stores report metadata + stats in server file.
+    """
+    form = await request.form()
+    token = str(form.get("token") or "").strip()
+    notes = str(form.get("notes") or "").strip()
+    lat = form.get("lat")
+    lng = form.get("lng")
+    timestamp = str(form.get("timestamp") or "").strip() or _auth_now_iso()
+    file = form.get("file")
+
+    if not token:
+        return {"ok": False, "message": "Missing session token."}
+    if file is None or not hasattr(file, "read"):
+        return {"ok": False, "message": "Missing image file."}
+
+    session_state_changed = False
+    with _auth_lock:
+        users, sessions = _auth_load_state()
+        session_state_changed = _auth_prune_sessions(sessions)
+        user = _auth_get_user_from_token(users, sessions, token)
+        if session_state_changed:
+            _auth_save_state(users, sessions)
+    if session_state_changed:
+        await auth_vol.commit.aio()
+    if not user:
+        return {"ok": False, "message": "You need to be logged in."}
+
+    suffix = _image_suffix(getattr(file, "filename", ""))
+    image_id, save_path = await _save_upload_file(file, suffix)
+
+    svc = CounterService()
+    stats = await svc.count_image.remote.aio(save_path, speed_mode="standard")
+
+    report = {
+        "id": str(uuid.uuid4()),
+        "created_at": _auth_now_iso(),
+        "timestamp": timestamp,
+        "user_id": user.get("id"),
+        "user_name": user.get("name"),
+        "user_email": user.get("email"),
+        "user_role": user.get("role", "resident"),
+        "notes": notes,
+        "lat": lat,
+        "lng": lng,
+        "image_id": image_id,
+        "image_filename": str(getattr(file, "filename", "") or ""),
+        "stats": stats,
+    }
+
+    with _auth_lock:
+        reports = _read_json_file(REPORTS_FILE, [])
+        if not isinstance(reports, list):
+            reports = []
+        reports.append(report)
+        _write_json_file(REPORTS_FILE, reports)
+    await auth_vol.commit.aio()
+
+    return {"ok": True, "report": report}
+
+
+@app.function(volumes={AUTH_DIR: auth_vol})
+@modal.fastapi_endpoint(method="POST")
+async def list_reports(request: Request) -> Dict[str, Any]:
+    """
+    HTTP endpoint:
+      POST application/json with:
+        - token: auth session token
+    Returns all resident reports for admin users.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "message": "Invalid JSON body."}
+
+    token = str((body or {}).get("token") or "").strip()
+    if not token:
+        return {"ok": False, "message": "Missing session token."}
+
+    changed = False
+    user = None
+    reports_sorted: List[Dict[str, Any]] = []
+    with _auth_lock:
+        users, sessions = _auth_load_state()
+        changed = _auth_prune_sessions(sessions)
+        user = _auth_get_user_from_token(users, sessions, token)
+        if user and str(user.get("role", "resident")) == "admin":
+            reports = _read_json_file(REPORTS_FILE, [])
+            if not isinstance(reports, list):
+                reports = []
+            reports_sorted = sorted(
+                reports,
+                key=lambda r: str(r.get("created_at") or r.get("timestamp") or ""),
+                reverse=True,
+            )
+        if changed:
+            _auth_save_state(users, sessions)
+    if changed:
+        await auth_vol.commit.aio()
+    if not user:
+        return {"ok": False, "message": "You need to be logged in."}
+    if str(user.get("role", "resident")) != "admin":
+        return {"ok": False, "message": "Admin access required."}
+
+    return {"ok": True, "reports": reports_sorted}
+
+
+@app.function(volumes={VIDEO_DIR: vol, AUTH_DIR: auth_vol}, secrets=[snowflake_secret])
+@modal.fastapi_endpoint(method="POST")
+async def admin_process_video(request: Request) -> Dict[str, Any]:
+    """
+    HTTP endpoint:
+      POST multipart/form-data with:
+        - token: auth session token (admin)
+        - file: video
+        - camera_id: int
+        - start_time/end_time: optional ISO timestamps
+        - lat/lng: optional
+    Runs video model and writes counts into dataset.
+    """
+    form = await request.form()
+    token = str(form.get("token") or "").strip()
+    file = form.get("file")
+    camera_id = _parse_int(form.get("camera_id"))
+    lat = form.get("lat")
+    lng = form.get("lng")
+    start_time = str(form.get("start_time") or "").strip()
+    end_time = str(form.get("end_time") or "").strip()
+    timestamp = end_time or str(form.get("timestamp") or "").strip() or _auth_now_iso()
+    speed_mode = str(form.get("speed_mode") or form.get("speed") or "standard").strip().lower()
+
+    if not token:
+        return {"ok": False, "message": "Missing session token."}
+    if file is None or not hasattr(file, "read"):
+        return {"ok": False, "message": "Missing video file."}
+    if camera_id is None:
+        return {"ok": False, "message": "camera_id is required."}
+
+    changed = False
+    user = None
+    with _auth_lock:
+        users, sessions = _auth_load_state()
+        changed = _auth_prune_sessions(sessions)
+        user = _auth_get_user_from_token(users, sessions, token)
+        if changed:
+            _auth_save_state(users, sessions)
+    if changed:
+        await auth_vol.commit.aio()
+    if not user:
+        return {"ok": False, "message": "You need to be logged in."}
+    if str(user.get("role", "resident")) != "admin":
+        return {"ok": False, "message": "Admin access required."}
+
+    video_id, save_path = await _save_upload_file(file, ".mp4")
+
+    svc = CounterService()
+    out = await svc.count_video.remote.aio(save_path, speed_mode=speed_mode)
+    db_write_status = _persist_detector_output(out, camera_id, lat, lng)
+
+    job = {
+        "id": str(uuid.uuid4()),
+        "created_at": _auth_now_iso(),
+        "admin_user_id": user.get("id"),
+        "admin_email": user.get("email"),
+        "video_id": video_id,
+        "video_filename": str(getattr(file, "filename", "") or ""),
+        "camera_id": camera_id,
+        "lat": lat,
+        "lng": lng,
+        "start_time": start_time or None,
+        "end_time": end_time or None,
+        "timestamp": timestamp,
+        "db_write_status": db_write_status,
+        "stats": out,
+    }
+
+    with _auth_lock:
+        jobs = _read_json_file(ADMIN_VIDEO_JOBS_FILE, [])
+        if not isinstance(jobs, list):
+            jobs = []
+        jobs.append(job)
+        _write_json_file(ADMIN_VIDEO_JOBS_FILE, jobs)
+    await auth_vol.commit.aio()
+
+    return {"ok": True, "job": job, **out}
 
 
 @app.local_entrypoint()

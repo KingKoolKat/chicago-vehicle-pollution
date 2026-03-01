@@ -1,70 +1,216 @@
 (function () {
-    const USERS_KEY = "ecotrack_users_v1";
-    const SESSION_KEY = "ecotrack_session_v1";
-    const COOKIE_NAME = "ecotrack_auth";
+    const LOCAL_AUTH_API_URL = "http://127.0.0.1:8001/auth";
+    const SESSION_TOKEN_KEY = "ecotrack_session_token_v1";
+    const SESSION_USER_KEY = "ecotrack_session_user_v1";
+    let resolvedAuthApiUrl = "";
 
-    function normalizeEmail(email) {
-        return (email || "").trim().toLowerCase();
+    function uniq(values) {
+        const seen = new Set();
+        const out = [];
+        for (const value of values) {
+            const clean = String(value || "").trim();
+            if (!clean || seen.has(clean)) continue;
+            seen.add(clean);
+            out.push(clean);
+        }
+        return out;
     }
 
-    function loadUsers() {
+    function getAuthApiCandidates() {
+        const cached = resolvedAuthApiUrl || sessionStorage.getItem("ecotrack_auth_api_url") || "";
+        return uniq([
+            window.AUTH_API_URL,
+            cached,
+            LOCAL_AUTH_API_URL,
+            "http://localhost:8001/auth"
+        ]);
+    }
+
+    function rememberAuthApiUrl(url) {
+        resolvedAuthApiUrl = String(url || "").trim();
+        if (!resolvedAuthApiUrl) return;
         try {
-            const raw = localStorage.getItem(USERS_KEY);
-            return raw ? JSON.parse(raw) : [];
+            sessionStorage.setItem("ecotrack_auth_api_url", resolvedAuthApiUrl);
         } catch (error) {
-            console.error("Unable to read users from storage", error);
-            return [];
+            console.error("Unable to cache auth API URL", error);
         }
     }
 
-    function saveUsers(users) {
-        localStorage.setItem(USERS_KEY, JSON.stringify(users));
+    function normalizeEmail(email) {
+        return (email || "").trim().toLowerCase();
     }
 
     function sanitizeUser(user) {
         if (!user) return null;
         return {
             id: user.id,
-            name: user.name,
-            email: user.email,
-            provider: user.provider || "local"
+            name: user.name || "",
+            email: normalizeEmail(user.email),
+            provider: user.provider || "local",
+            role: user.role || "resident",
+            avatarUrl: user.avatarUrl || ""
         };
     }
 
-    function setAuthCookie(isAuthenticated) {
-        if (!isAuthenticated) {
-            document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
+    function getStoredToken() {
+        return sessionStorage.getItem(SESSION_TOKEN_KEY) || "";
+    }
+
+    function getSessionToken() {
+        return getStoredToken();
+    }
+
+    function setStoredSession(token, user) {
+        if (!token || !user) {
+            clearStoredSession();
             return;
         }
-        const ttlSeconds = 60 * 60 * 24 * 14;
-        document.cookie = `${COOKIE_NAME}=1; path=/; max-age=${ttlSeconds}; SameSite=Lax`;
+        sessionStorage.setItem(SESSION_TOKEN_KEY, token);
+        sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(sanitizeUser(user)));
     }
 
-    function createSession(user) {
-        const session = {
-            user: sanitizeUser(user),
-            startedAt: new Date().toISOString()
-        };
-        localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-        setAuthCookie(true);
-        return session.user;
+    function clearStoredSession() {
+        sessionStorage.removeItem(SESSION_TOKEN_KEY);
+        sessionStorage.removeItem(SESSION_USER_KEY);
     }
 
     function getSessionUser() {
         try {
-            const raw = localStorage.getItem(SESSION_KEY);
+            const raw = sessionStorage.getItem(SESSION_USER_KEY);
             if (!raw) return null;
-            const parsed = JSON.parse(raw);
-            return parsed && parsed.user ? parsed.user : null;
+            return sanitizeUser(JSON.parse(raw));
         } catch (error) {
-            console.error("Unable to parse session", error);
+            console.error("Unable to parse session user", error);
             return null;
         }
     }
 
+    async function authRequest(action, payload = {}) {
+        const attempted = [];
+        const nonOkResponses = [];
+        const body = JSON.stringify({ action, ...payload });
+        const candidates = getAuthApiCandidates();
+
+        for (const url of candidates) {
+            attempted.push(url);
+            try {
+                const response = await fetch(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body
+                });
+                let data = {};
+                try {
+                    data = await response.json();
+                } catch (error) {
+                    data = {};
+                }
+                if (!response.ok) {
+                    nonOkResponses.push(`${url} -> ${response.status}`);
+                    continue;
+                }
+                rememberAuthApiUrl(url);
+                return data;
+            } catch (error) {
+                console.error(`Auth request failed for action '${action}' via ${url}`, error);
+                continue;
+            }
+        }
+
+        return {
+            ok: false,
+            message: nonOkResponses.length
+                ? `Auth server rejected requests. Responses: ${nonOkResponses.join(" | ")}. Tried: ${attempted.join(", ")}`
+                : `Unable to reach authentication server. Start local_auth_server.py first. Tried: ${attempted.join(", ")}`
+        };
+    }
+
+    async function signUp({ name, email, password }) {
+        const result = await authRequest("signup", {
+            name: (name || "").trim(),
+            email: normalizeEmail(email),
+            password: password || ""
+        });
+        if (result.ok) {
+            setStoredSession(result.token, result.user);
+        }
+        return result;
+    }
+
+    async function login({ email, password }) {
+        const result = await authRequest("login", {
+            email: normalizeEmail(email),
+            password: password || ""
+        });
+        if (result.ok) {
+            setStoredSession(result.token, result.user);
+        }
+        return result;
+    }
+
+    async function upsertGoogleUser(profile) {
+        const result = await authRequest("google", { profile: profile || {} });
+        if (result.ok) {
+            setStoredSession(result.token, result.user);
+        }
+        return result;
+    }
+
+    async function updateProfile({ name, role, avatarUrl }) {
+        const token = getStoredToken();
+        if (!token) {
+            return { ok: false, message: "You need to be logged in." };
+        }
+
+        const result = await authRequest("update_profile", {
+            token,
+            name: (name || "").trim(),
+            role: role || "resident",
+            avatarUrl: (avatarUrl || "").trim()
+        });
+        if (result.ok) {
+            setStoredSession(token, result.user);
+        }
+        return result;
+    }
+
+    async function updatePassword({ currentPassword, newPassword }) {
+        const token = getStoredToken();
+        if (!token) {
+            return { ok: false, message: "You need to be logged in." };
+        }
+
+        const result = await authRequest("update_password", {
+            token,
+            currentPassword: currentPassword || "",
+            newPassword: newPassword || ""
+        });
+        if (result.ok) {
+            setStoredSession(token, result.user);
+        }
+        return result;
+    }
+
+    async function getFullUserById(userId) {
+        const token = getStoredToken();
+        if (!token || !userId) return null;
+        const result = await authRequest("get_user", { token, userId });
+        return result.ok ? sanitizeUser(result.user) : null;
+    }
+
     function logout() {
-        localStorage.removeItem(SESSION_KEY);
-        setAuthCookie(false);
+        const token = getStoredToken();
+        clearStoredSession();
+        if (!token) return;
+
+        const logoutUrl = resolvedAuthApiUrl || getAuthApiCandidates()[0] || "/auth";
+        fetch(logoutUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "logout", token })
+        }).catch((error) => {
+            console.error("Logout request failed", error);
+        });
     }
 
     function getInitials(name, email) {
@@ -76,89 +222,16 @@
         return (words[0][0] + words[1][0]).toUpperCase();
     }
 
-    function signUp({ name, email, password }) {
-        const cleanName = (name || "").trim();
-        const cleanEmail = normalizeEmail(email);
-        const cleanPassword = (password || "").trim();
-
-        if (!cleanName) {
-            return { ok: false, message: "Name is required." };
-        }
-        if (!cleanEmail || !cleanEmail.includes("@")) {
-            return { ok: false, message: "Valid email is required." };
-        }
-        if (cleanPassword.length < 8) {
-            return { ok: false, message: "Password must be at least 8 characters." };
-        }
-
-        const users = loadUsers();
-        const existing = users.find(u => normalizeEmail(u.email) === cleanEmail);
-        if (existing) {
-            return { ok: false, message: "An account with this email already exists." };
-        }
-
-        const user = {
-            id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
-            name: cleanName,
-            email: cleanEmail,
-            password: cleanPassword,
-            provider: "local",
-            createdAt: new Date().toISOString()
-        };
-
-        users.push(user);
-        saveUsers(users);
-        createSession(user);
-        return { ok: true, user: sanitizeUser(user) };
-    }
-
-    function login({ email, password }) {
-        const cleanEmail = normalizeEmail(email);
-        const cleanPassword = (password || "").trim();
-        const users = loadUsers();
-        const user = users.find(
-            u => normalizeEmail(u.email) === cleanEmail && u.password === cleanPassword
-        );
-        if (!user) {
-            return { ok: false, message: "Incorrect email or password." };
-        }
-
-        createSession(user);
-        return { ok: true, user: sanitizeUser(user) };
-    }
-
-    function upsertGoogleUser(profile) {
-        if (!profile || !profile.email) {
-            return { ok: false, message: "Google profile missing email." };
-        }
-
-        const cleanEmail = normalizeEmail(profile.email);
-        const users = loadUsers();
-        let user = users.find(u => normalizeEmail(u.email) === cleanEmail);
-
-        if (!user) {
-            user = {
-                id: profile.sub || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())),
-                name: profile.name || cleanEmail.split("@")[0],
-                email: cleanEmail,
-                password: "",
-                provider: "google",
-                createdAt: new Date().toISOString()
-            };
-            users.push(user);
-            saveUsers(users);
-        }
-
-        createSession(user);
-        return { ok: true, user: sanitizeUser(user) };
-    }
-
     window.Auth = {
         signUp,
         login,
         logout,
         getSessionUser,
+        getSessionToken,
+        getFullUserById,
         getInitials,
-        upsertGoogleUser
+        upsertGoogleUser,
+        updateProfile,
+        updatePassword
     };
 })();
