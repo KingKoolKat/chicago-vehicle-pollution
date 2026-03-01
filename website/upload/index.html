@@ -457,7 +457,9 @@
         }
 
         document.addEventListener("DOMContentLoaded", async () => {
-            const currentUser = window.Auth ? window.Auth.getSessionUser() : null;
+            const currentUser = window.Auth
+                ? await (window.Auth.refreshSession ? window.Auth.refreshSession() : Promise.resolve(window.Auth.getSessionUser()))
+                : null;
             if (!currentUser) {
                 window.location.href = "../login/";
                 return;

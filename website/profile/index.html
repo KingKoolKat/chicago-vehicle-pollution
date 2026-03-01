@@ -66,11 +66,7 @@
     <script src="../js/components.js"></script>
     <script src="../js/main.js"></script>
     <script>
-        const sessionUser = window.Auth ? window.Auth.getSessionUser() : null;
-        if (!sessionUser) {
-            window.location.href = "../login/";
-        }
-        const isLocalAccount = (sessionUser && (sessionUser.provider || "local") === "local");
+        let isLocalAccount = true;
 
         let uploadedAvatarDataUrl = "";
 
@@ -91,8 +87,6 @@
             document.getElementById("passwordSection").classList.toggle("hidden", !isLocalAccount);
             document.getElementById("profileName").value = user.name || "";
             document.getElementById("profileEmail").value = user.email || "";
-            document.getElementById("profileAvatarUrl").value = user.avatarUrl || "";
-            document.getElementById("profileRole").value = user.role || "resident";
             setPreview(user.avatarUrl);
             document.getElementById("statusTag").textContent = user.role === "admin" ? "Admin" : "Resident";
         }
@@ -112,9 +106,9 @@
         document.getElementById("profileForm").addEventListener("submit", async (event) => {
             event.preventDefault();
             const name = document.getElementById("profileName").value;
-            const role = document.getElementById("profileRole").value;
-            const avatarUrlFromInput = document.getElementById("profileAvatarUrl").value.trim();
-            const avatarUrl = uploadedAvatarDataUrl || avatarUrlFromInput;
+            const currentUser = window.Auth.getSessionUser() || {};
+            const role = currentUser.role === "admin" ? "admin" : "resident";
+            const avatarUrl = uploadedAvatarDataUrl || (currentUser.avatarUrl || "");
 
             const result = await window.Auth.updateProfile({ name, role, avatarUrl });
             if (!result.ok) {
@@ -150,7 +144,19 @@
             setStatus("profileStatus", hasPasswordInput ? "Profile and password updated successfully." : "Profile updated successfully.", false);
         });
 
-        loadProfile();
+        async function initProfileSession() {
+            const sessionUser = window.Auth
+                ? await (window.Auth.refreshSession ? window.Auth.refreshSession() : Promise.resolve(window.Auth.getSessionUser()))
+                : null;
+            if (!sessionUser) {
+                window.location.href = "../login/";
+                return;
+            }
+            isLocalAccount = (sessionUser.provider || "local") === "local";
+            loadProfile();
+        }
+
+        initProfileSession();
     </script>
 </body>
 </html>

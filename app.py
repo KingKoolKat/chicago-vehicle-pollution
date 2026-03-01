@@ -511,7 +511,7 @@ def _auth_is_admin(value: Any) -> bool:
         return value
     if isinstance(value, (int, float)):
         return bool(value)
-    return str(value or "").strip().lower() in {"1", "true", "t", "yes", "y"}
+    return str(value or "").strip().lower() in {"1", "true", "t", "yes", "y", "admin"}
 
 
 def _auth_user_from_row(row: Dict[str, Any]) -> Dict[str, Any]:

@@ -85,6 +85,28 @@
         }
     }
 
+    async function refreshSession() {
+        const token = getStoredToken();
+        if (!token) return null;
+
+        const currentUser = getSessionUser();
+        const result = await authRequest("session", { token });
+        if (result.ok && result.user) {
+            setStoredSession(token, result.user);
+            return getSessionUser();
+        }
+
+        const message = String(result.message || "");
+        const invalidSession = /invalid session|need to be logged in/i.test(message);
+        if (invalidSession) {
+            clearStoredSession();
+            return null;
+        }
+
+        // Keep cached user if backend is temporarily unreachable.
+        return currentUser;
+    }
+
     async function authRequest(action, payload = {}) {
         const attempted = [];
         const nonOkResponses = [];
@@ -235,6 +257,7 @@
         login,
         logout,
         getSessionUser,
+        refreshSession,
         getSessionToken,
         getFullUserById,
         listReports,
