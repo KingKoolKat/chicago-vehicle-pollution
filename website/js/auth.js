@@ -2,6 +2,7 @@
     const DEPLOYED_AUTH_API_URL = "https://kingkoolkat--ecotrack-inference-auth.modal.run";
     const SESSION_TOKEN_KEY = "ecotrack_session_token_v1";
     const SESSION_USER_KEY = "ecotrack_session_user_v1";
+    const SESSION_VALIDATED_AT_KEY = "ecotrack_session_validated_at_v1";
     let resolvedAuthApiUrl = "";
 
     function uniq(values) {
@@ -67,11 +68,13 @@
         }
         sessionStorage.setItem(SESSION_TOKEN_KEY, token);
         sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(sanitizeUser(user)));
+        sessionStorage.setItem(SESSION_VALIDATED_AT_KEY, String(Date.now()));
     }
 
     function clearStoredSession() {
         sessionStorage.removeItem(SESSION_TOKEN_KEY);
         sessionStorage.removeItem(SESSION_USER_KEY);
+        sessionStorage.removeItem(SESSION_VALIDATED_AT_KEY);
     }
 
     function getSessionUser() {
@@ -85,11 +88,26 @@
         }
     }
 
-    async function refreshSession() {
+    function getLastValidatedAt() {
+        const raw = sessionStorage.getItem(SESSION_VALIDATED_AT_KEY);
+        const value = Number(raw || 0);
+        return Number.isFinite(value) ? value : 0;
+    }
+
+    async function refreshSession(options = {}) {
+        const force = options.force === true;
+        const maxAgeMs = Number(options.maxAgeMs || 0);
         const token = getStoredToken();
         if (!token) return null;
 
         const currentUser = getSessionUser();
+        if (!force && currentUser && maxAgeMs > 0) {
+            const age = Date.now() - getLastValidatedAt();
+            if (age >= 0 && age < maxAgeMs) {
+                return currentUser;
+            }
+        }
+
         const result = await authRequest("session", { token });
         if (result.ok && result.user) {
             setStoredSession(token, result.user);
@@ -237,6 +255,12 @@
         return authRequest("list_reports", { token });
     }
 
+    async function getSessionUserCached(maxAgeMs = 15 * 60 * 1000) {
+        const cached = getSessionUser();
+        if (cached) return cached;
+        return refreshSession({ force: false, maxAgeMs });
+    }
+
     function logout() {
         const token = getStoredToken();
         clearStoredSession();
@@ -266,6 +290,7 @@
         login,
         logout,
         getSessionUser,
+        getSessionUserCached,
         refreshSession,
         getSessionToken,
         getFullUserById,

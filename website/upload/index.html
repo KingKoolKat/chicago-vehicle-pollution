@@ -457,9 +457,14 @@
         }
 
         document.addEventListener("DOMContentLoaded", async () => {
-            const currentUser = window.Auth
-                ? await (window.Auth.refreshSession ? window.Auth.refreshSession() : Promise.resolve(window.Auth.getSessionUser()))
-                : null;
+            let currentUser = window.Auth ? window.Auth.getSessionUser() : null;
+            if (!currentUser && window.Auth) {
+                currentUser = await (
+                    window.Auth.getSessionUserCached
+                        ? window.Auth.getSessionUserCached(15 * 60 * 1000)
+                        : (window.Auth.refreshSession ? window.Auth.refreshSession() : Promise.resolve(null))
+                );
+            }
             if (!currentUser) {
                 window.location.href = "../login/";
                 return;

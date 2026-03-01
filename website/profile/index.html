@@ -146,9 +146,14 @@
         });
 
         async function initProfileSession() {
-            const sessionUser = window.Auth
-                ? await (window.Auth.refreshSession ? window.Auth.refreshSession() : Promise.resolve(window.Auth.getSessionUser()))
-                : null;
+            let sessionUser = window.Auth ? window.Auth.getSessionUser() : null;
+            if (!sessionUser && window.Auth) {
+                sessionUser = await (
+                    window.Auth.getSessionUserCached
+                        ? window.Auth.getSessionUserCached(15 * 60 * 1000)
+                        : (window.Auth.refreshSession ? window.Auth.refreshSession() : Promise.resolve(null))
+                );
+            }
             if (!sessionUser) {
                 window.location.href = "../login/";
                 return;

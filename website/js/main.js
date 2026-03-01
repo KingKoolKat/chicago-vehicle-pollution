@@ -3,6 +3,9 @@ const CHAT_API_URL = window.CHAT_API_URL || '/chat';
 const CHAT_TEST_MODE = window.CHAT_TEST_MODE === true;
 const TRAFFIC_MAP_API_URL = window.TRAFFIC_MAP_API_URL || '/traffic_map';
 const LANGUAGE_KEY = 'ecotrack_language';
+const TRAFFIC_CACHE_KEY = 'ecotrack_traffic_map_cache_v1';
+const TRAFFIC_CACHE_TTL_MS = 10 * 60 * 1000;
+const TRAFFIC_CACHE_MAX_ENTRIES = 24;
 const isHomePage = window.location.pathname === '/' || window.location.pathname.endsWith('/index.html');
 let sectionsReadyPromise = Promise.resolve();
 let userLocation = null;
@@ -259,7 +262,8 @@ let pulseMarkers = [];
 let cameraJumpPoints = [];
 let activeCameraJumpId = null;
 let mapArrowNavigationBound = false;
-const PULSE_RADIUS_DIVISOR = 57;
+let hasAutoFitted = false;
+const PULSE_RADIUS_DIVISOR = 55;
 const CAMERA_HIT_RADIUS_PX = 14;
 const HEATMAP_CONFIG = window.HEATMAP_CONFIG || {};
 const HEATMAP_POLLUTANTS = HEATMAP_CONFIG.POLLUTANTS || {};
@@ -275,6 +279,7 @@ let heatmapMode = 'traffic';
 let selectedPollutant = HEATMAP_DEFAULT_POLLUTANT;
 let selectedEmissionMetric = HEATMAP_DEFAULT_METRIC === 'intensity' ? 'intensity' : 'total';
 let latestTrafficPayload = null;
+let trafficDataCache = {};
 const emissionsCongestionCache = new Map();
 
 function setTrafficMapStatus(message, isError = false) {
@@ -302,6 +307,87 @@ function formatMeasure(value, fractionDigits = 2) {
 function toSafeNumber(value, fallback = 0) {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function normalizeTrafficDateKey(date) {
+    if (!date) return '__latest__';
+    const text = `${date}`.trim();
+    return text || '__latest__';
+}
+
+function loadTrafficCacheFromStorage() {
+    try {
+        const raw = localStorage.getItem(TRAFFIC_CACHE_KEY);
+        if (!raw) {
+            trafficDataCache = {};
+            return;
+        }
+        const parsed = JSON.parse(raw);
+        trafficDataCache = parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_) {
+        trafficDataCache = {};
+    }
+}
+
+function saveTrafficCacheToStorage() {
+    try {
+        localStorage.setItem(TRAFFIC_CACHE_KEY, JSON.stringify(trafficDataCache));
+    } catch (_) {
+        // Ignore storage quota/private mode errors.
+    }
+}
+
+function pruneTrafficCache() {
+    const now = Date.now();
+    const valid = [];
+
+    Object.entries(trafficDataCache || {}).forEach(([key, entry]) => {
+        const payload = entry?.payload;
+        const fetchedAt = toSafeNumber(entry?.fetchedAt, 0);
+        if (!payload || !fetchedAt) return;
+        if (now - fetchedAt > TRAFFIC_CACHE_TTL_MS) return;
+        valid.push({ key, fetchedAt, payload });
+    });
+
+    valid.sort((a, b) => b.fetchedAt - a.fetchedAt);
+
+    const next = {};
+    valid.slice(0, TRAFFIC_CACHE_MAX_ENTRIES).forEach((entry) => {
+        next[entry.key] = {
+            fetchedAt: entry.fetchedAt,
+            payload: entry.payload,
+        };
+    });
+    trafficDataCache = next;
+    saveTrafficCacheToStorage();
+}
+
+function getCachedTrafficPayload(date = null) {
+    const key = normalizeTrafficDateKey(date);
+    const entry = trafficDataCache[key];
+    if (!entry || !entry.payload) return null;
+
+    const fetchedAt = toSafeNumber(entry.fetchedAt, 0);
+    if (!fetchedAt || (Date.now() - fetchedAt > TRAFFIC_CACHE_TTL_MS)) {
+        delete trafficDataCache[key];
+        saveTrafficCacheToStorage();
+        return null;
+    }
+
+    return entry.payload;
+}
+
+function cacheTrafficPayload(date, payload) {
+    if (!payload || typeof payload !== 'object') return;
+
+    const now = Date.now();
+    const requestKey = normalizeTrafficDateKey(date);
+    trafficDataCache[requestKey] = { fetchedAt: now, payload };
+
+    const selectedKey = normalizeTrafficDateKey(payload.selected_date);
+    trafficDataCache[selectedKey] = { fetchedAt: now, payload };
+
+    pruneTrafficCache();
 }
 
 function formatDashboardEmissionKg(totalKg) {
@@ -1035,9 +1121,14 @@ function renderHeatmapMarkers(cameras) {
         });
         bounds.push([lat, lng]);
     });
+    
+    if (!hasAutoFitted && bounds.length > 0) {
+        map.fitBounds(L.latLngBounds(bounds), {
+            padding: [30, 30],
+            maxZoom: 13
+        });
 
-    if (bounds.length > 0) {
-        map.fitBounds(bounds, { padding: [30, 30], maxZoom: 13 });
+        hasAutoFitted = true;
     }
 }
 
@@ -1167,6 +1258,17 @@ function bindMapArrowNavigation() {
 }
 
 async function fetchTrafficMapData(date = null) {
+    const cached = getCachedTrafficPayload(date);
+    if (cached) {
+        if (Array.isArray(cached.available_dates)) {
+            trafficDates = cached.available_dates;
+        }
+        if (cached.selected_date) {
+            selectedTrafficDate = cached.selected_date;
+        }
+        return cached;
+    }
+
     const url = new URL(TRAFFIC_MAP_API_URL, window.location.href);
     if (date) {
         url.searchParams.set('date', date);
@@ -1181,6 +1283,13 @@ async function fetchTrafficMapData(date = null) {
     if (data.error) {
         throw new Error(data.error);
     }
+    if (Array.isArray(data.available_dates)) {
+        trafficDates = data.available_dates;
+    }
+    if (data.selected_date) {
+        selectedTrafficDate = data.selected_date;
+    }
+    cacheTrafficPayload(date, data);
     return data;
 }
 
@@ -1695,6 +1804,8 @@ function setupDropZoneHandlers() {
 // Initialize
 window.onload = async function() {
     requireAuthForUploadRoute();
+    loadTrafficCacheFromStorage();
+    pruneTrafficCache();
 
     sectionsReadyPromise = injectSectionsOnHomePage();
     await sectionsReadyPromise;
