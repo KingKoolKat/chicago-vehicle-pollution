@@ -1,6 +1,5 @@
 (function () {
     const DEPLOYED_AUTH_API_URL = "https://kingkoolkat--ecotrack-inference-auth.modal.run";
-    const LOCAL_AUTH_API_URL = "http://127.0.0.1:8001/auth";
     const SESSION_TOKEN_KEY = "ecotrack_session_token_v1";
     const SESSION_USER_KEY = "ecotrack_session_user_v1";
     let resolvedAuthApiUrl = "";
@@ -23,9 +22,7 @@
             window.AUTH_API_URL,
             cached,
             DEPLOYED_AUTH_API_URL,
-            "/auth",
-            LOCAL_AUTH_API_URL,
-            "http://localhost:8001/auth"
+            "/auth"
         ]);
     }
 
