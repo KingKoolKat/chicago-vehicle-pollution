@@ -422,7 +422,11 @@ def _get_available_traffic_dates(conn) -> List[str]:
         ORDER BY 1
         """,
     )
-    return [str(row["traffic_date"]) for row in rows if row.get("traffic_date")]
+    available_dates = [str(row["traffic_date"]) for row in rows if row.get("traffic_date")]
+    max_visible_date = _parse_date(os.getenv("TRAFFIC_MAP_DATE_MAX", "2026-02-28"))
+    if max_visible_date:
+        available_dates = [date for date in available_dates if date <= max_visible_date]
+    return available_dates
 
 
 def _get_traffic_camera_rows(conn, selected_date: str) -> List[Dict[str, Any]]:

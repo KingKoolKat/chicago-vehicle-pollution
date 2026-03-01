@@ -165,11 +165,20 @@
 
         async function initProfileSession() {
             let sessionUser = window.Auth ? window.Auth.getSessionUser() : null;
-            if (!sessionUser && window.Auth) {
+            if (window.Auth && window.Auth.refreshSession) {
+                try {
+                    const refreshed = await window.Auth.refreshSession({ force: true });
+                    if (refreshed) {
+                        sessionUser = refreshed;
+                    }
+                } catch (error) {
+                    console.error("Failed to refresh profile session", error);
+                }
+            } else if (!sessionUser && window.Auth) {
                 sessionUser = await (
                     window.Auth.getSessionUserCached
                         ? window.Auth.getSessionUserCached(15 * 60 * 1000)
-                        : (window.Auth.refreshSession ? window.Auth.refreshSession() : Promise.resolve(null))
+                        : Promise.resolve(null)
                 );
             }
             if (!sessionUser) {

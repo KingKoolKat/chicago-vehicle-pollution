@@ -249,6 +249,7 @@
         const REPORT_OPS_API_URL = window.REPORT_OPS_API_URL || "https://kingkoolkat--ecotrack-inference-report-ops.modal.run";
         const BATCH_VIDEO_API_URL = window.BATCH_VIDEO_API_URL || "https://kingkoolkat--ecotrack-inference-batch-upload-and-count.modal.run";
         const UPLOAD_TRAFFIC_MAP_API_URL = window.TRAFFIC_MAP_API_URL || "https://kingkoolkat--ecotrack-inference-traffic-map.modal.run";
+        const TRAFFIC_CACHE_KEY = "ecotrack_traffic_map_cache_v1";
 
         let residentSelectedFile = null;
         let adminCameraRecords = [];
@@ -268,6 +269,14 @@
                 .replace(/>/g, "&gt;")
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#39;");
+        }
+
+        function clearTrafficMapCache() {
+            try {
+                localStorage.removeItem(TRAFFIC_CACHE_KEY);
+            } catch (error) {
+                console.error("Unable to clear traffic cache", error);
+            }
         }
 
         function renderClassCounts(listId, counts) {
@@ -971,13 +980,14 @@
                     }
 
                     applyAdminStats(data);
+                    clearTrafficMapCache();
                     if (useBatch) {
                         const summary = data.summary || {};
                         const successCount = Number(summary.success_count || 0);
                         const errorCount = Number(summary.error_count || 0);
                         setStatus(
                             "adminStatus",
-                            `Batch complete: ${successCount} success, ${errorCount} failed.`,
+                            `Batch complete: ${successCount} success, ${errorCount} failed. Heat map cache cleared.`,
                             errorCount > 0
                         );
                     } else {
@@ -985,7 +995,7 @@
                         const processedDate = data.recorded_date || (data.job && data.job.recorded_date) || recordedDate;
                         setStatus(
                             "adminStatus",
-                            `Video processed (${dbWriteStatus}). For map updates, check the selected date: ${processedDate}.`,
+                            `Video processed (${dbWriteStatus}). Heat map cache cleared. Check selected date: ${processedDate}.`,
                             String(dbWriteStatus).toLowerCase().startsWith("error")
                         );
                     }
@@ -997,11 +1007,20 @@
 
         document.addEventListener("DOMContentLoaded", async () => {
             let currentUser = window.Auth ? window.Auth.getSessionUser() : null;
-            if (!currentUser && window.Auth) {
+            if (window.Auth && window.Auth.refreshSession) {
+                try {
+                    const refreshed = await window.Auth.refreshSession({ force: true });
+                    if (refreshed) {
+                        currentUser = refreshed;
+                    }
+                } catch (error) {
+                    console.error("Failed to refresh session on upload page", error);
+                }
+            } else if (!currentUser && window.Auth) {
                 currentUser = await (
                     window.Auth.getSessionUserCached
                         ? window.Auth.getSessionUserCached(15 * 60 * 1000)
-                        : (window.Auth.refreshSession ? window.Auth.refreshSession() : Promise.resolve(null))
+                        : Promise.resolve(null)
                 );
             }
             if (!currentUser) {

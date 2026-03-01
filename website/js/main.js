@@ -8,6 +8,7 @@ const LANGUAGE_KEY = 'ecotrack_language';
 const TRAFFIC_CACHE_KEY = 'ecotrack_traffic_map_cache_v1';
 const TRAFFIC_CACHE_TTL_MS = 10 * 60 * 1000;
 const TRAFFIC_CACHE_MAX_ENTRIES = 24;
+const TRAFFIC_MAP_MAX_DATE = '2026-02-28';
 const isHomePage = window.location.pathname === '/' || window.location.pathname.endsWith('/index.html');
 let sectionsReadyPromise = Promise.resolve();
 let userLocation = null;
@@ -317,6 +318,25 @@ function normalizeTrafficDateKey(date) {
     return text || '__latest__';
 }
 
+function normalizeIsoDate(value) {
+    const text = `${value || ''}`.trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
+}
+
+function isAllowedTrafficDate(value) {
+    const date = normalizeIsoDate(value);
+    const maxDate = normalizeIsoDate(TRAFFIC_MAP_MAX_DATE);
+    if (!date) return false;
+    if (!maxDate) return true;
+    return date <= maxDate;
+}
+
+function filterAllowedTrafficDates(values) {
+    return (Array.isArray(values) ? values : [])
+        .map((value) => normalizeIsoDate(value))
+        .filter((value) => value && isAllowedTrafficDate(value));
+}
+
 function loadTrafficCacheFromStorage() {
     try {
         const raw = localStorage.getItem(TRAFFIC_CACHE_KEY);
@@ -375,8 +395,25 @@ function getCachedTrafficPayload(date = null) {
         saveTrafficCacheToStorage();
         return null;
     }
+    const payload = entry.payload;
+    const selectedDate = normalizeIsoDate(payload.selected_date);
+    if (selectedDate && !isAllowedTrafficDate(selectedDate)) {
+        delete trafficDataCache[key];
+        saveTrafficCacheToStorage();
+        return null;
+    }
 
-    return entry.payload;
+    const availableDates = filterAllowedTrafficDates(payload.available_dates);
+    if (selectedDate && availableDates.length && !availableDates.includes(selectedDate)) {
+        delete trafficDataCache[key];
+        saveTrafficCacheToStorage();
+        return null;
+    }
+
+    return {
+        ...payload,
+        available_dates: availableDates,
+    };
 }
 
 function cacheTrafficPayload(date, payload) {
@@ -600,8 +637,13 @@ function updateTrafficSummary(summary) {
 }
 
 function updateTrafficDateControls(selectedDate, availableDates) {
-    trafficDates = Array.isArray(availableDates) ? availableDates : [];
-    selectedTrafficDate = selectedDate || null;
+    trafficDates = filterAllowedTrafficDates(availableDates);
+    const cleanSelectedDate = normalizeIsoDate(selectedDate);
+    if (cleanSelectedDate && trafficDates.includes(cleanSelectedDate)) {
+        selectedTrafficDate = cleanSelectedDate;
+    } else {
+        selectedTrafficDate = trafficDates.length ? trafficDates[trafficDates.length - 1] : null;
+    }
 
     const label = document.getElementById('trafficDateLabel');
     const slider = document.getElementById('trafficDateSlider');
@@ -1285,11 +1327,19 @@ async function fetchTrafficMapData(date = null) {
     if (data.error) {
         throw new Error(data.error);
     }
-    if (Array.isArray(data.available_dates)) {
-        trafficDates = data.available_dates;
+    const filteredDates = filterAllowedTrafficDates(data.available_dates);
+    if (filteredDates.length) {
+        data.available_dates = filteredDates;
+        trafficDates = filteredDates;
+    } else if (Array.isArray(data.available_dates)) {
+        data.available_dates = [];
+        trafficDates = [];
     }
-    if (data.selected_date) {
+    if (data.selected_date && isAllowedTrafficDate(data.selected_date)) {
         selectedTrafficDate = data.selected_date;
+    } else if (filteredDates.length) {
+        selectedTrafficDate = filteredDates[filteredDates.length - 1];
+        data.selected_date = selectedTrafficDate;
     }
     cacheTrafficPayload(date, data);
     return data;
