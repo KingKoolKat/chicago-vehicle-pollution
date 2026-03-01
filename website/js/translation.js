@@ -1,6 +1,6 @@
 const translations = {
     en: {
-        appName: "EcoTrack",
+        appName: "VanData",
         "nav.dashboard": "Dashboard",
         "nav.heatmap": "Heat Map",
         "nav.predictions": "Predictions",
@@ -67,7 +67,7 @@ const translations = {
         "chat.quick4": "Reduce emissions?"
     },
     es: {
-        appName: "EcoTrack",
+        appName: "VanData",
         "nav.dashboard": "Panel",
         "nav.heatmap": "Mapa de Calor",
         "nav.predictions": "Predicciones",
@@ -134,7 +134,7 @@ const translations = {
         "chat.quick4": "¿Reducir emisiones?"
     },
     zh: {
-        appName: "EcoTrack",
+        appName: "VanData",
         "nav.dashboard": "仪表板",
         "nav.heatmap": "热力图",
         "nav.predictions": "预测",
