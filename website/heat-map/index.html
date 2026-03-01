@@ -22,13 +22,40 @@
                     <h2 class="text-3xl font-bold mb-2" data-i18n="map.title">Emissions Heat Map</h2>
                     <p class="text-gray-400" data-i18n="map.subtitle">Real-time traffic and pollution intensity visualization</p>
                 </div>
-                <div class="flex gap-3">
-                    <button onclick="toggleLayer('traffic')" class="px-4 py-2 rounded-lg bg-blue-500/20 border border-blue-500/50 hover:bg-blue-500/30 transition-all active" id="btn-traffic">
-                        <i class="fas fa-traffic-light mr-2"></i>Traffic
-                    </button>
-                    <button onclick="toggleLayer('emissions')" class="px-4 py-2 rounded-lg bg-green-500/20 border border-green-500/50 hover:bg-green-500/30 transition-all active" id="btn-emissions">
-                        <i class="fas fa-smog mr-2"></i>Emissions
-                    </button>
+                <div class="flex flex-col md:items-end gap-2">
+                    <div class="flex gap-3">
+                        <button onclick="toggleLayer('traffic')" class="px-4 py-2 rounded-lg bg-blue-500/20 border border-blue-500/50 hover:bg-blue-500/30 transition-all active" id="btn-traffic">
+                            <i class="fas fa-traffic-light mr-2"></i>Traffic
+                        </button>
+                        <button onclick="toggleLayer('emissions')" class="px-4 py-2 rounded-lg bg-green-500/20 border border-green-500/50 hover:bg-green-500/30 transition-all active" id="btn-emissions">
+                            <i class="fas fa-smog mr-2"></i>Emissions
+                        </button>
+                    </div>
+                    <div class="text-sm text-gray-500" id="trafficMapStatus">Loading traffic data...</div>
+                </div>
+            </div>
+
+            <div class="glass-panel rounded-xl p-4 mb-5">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                    <div>
+                        <div class="text-sm uppercase tracking-wide text-gray-500">Selected Date</div>
+                        <div class="text-lg font-semibold" id="trafficDateLabel">--</div>
+                    </div>
+                    <div class="w-full md:w-2/3">
+                        <input
+                            id="trafficDateSlider"
+                            type="range"
+                            min="0"
+                            max="0"
+                            value="0"
+                            step="1"
+                            class="w-full slider-thumb"
+                        />
+                        <div class="flex justify-between text-xs text-gray-500 mt-2">
+                            <span id="trafficDateMin">--</span>
+                            <span id="trafficDateMax">--</span>
+                        </div>
+                    </div>
                 </div>
             </div>
             
@@ -63,24 +90,24 @@
             <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div class="glass-panel rounded-xl p-4 border-l-4 border-red-500">
                     <div class="flex justify-between items-center">
-                        <span class="text-gray-400 text-sm" data-i18n="alerts.critical">Critical Zones</span>
-                        <span class="text-2xl font-bold text-red-400">3</span>
+                        <span class="text-gray-400 text-sm">Heavy Traffic Cameras</span>
+                        <span class="text-2xl font-bold text-red-400" id="heavyCameraCount">0</span>
                     </div>
-                    <p class="text-xs text-gray-500 mt-1">Downtown, Industrial District, Harbor</p>
+                    <p class="text-xs text-gray-500 mt-1">Cameras with highest normalized traffic intensity</p>
                 </div>
                 <div class="glass-panel rounded-xl p-4 border-l-4 border-yellow-500">
                     <div class="flex justify-between items-center">
-                        <span class="text-gray-400 text-sm" data-i18n="alerts.moderate">Moderate Alerts</span>
-                        <span class="text-2xl font-bold text-yellow-400">7</span>
+                        <span class="text-gray-400 text-sm">Total Vehicles (Date)</span>
+                        <span class="text-2xl font-bold text-yellow-400" id="totalVehiclesCount">0</span>
                     </div>
-                    <p class="text-xs text-gray-500 mt-1">Highway intersections, School zones</p>
+                    <p class="text-xs text-gray-500 mt-1">Aggregate count from all active cameras</p>
                 </div>
                 <div class="glass-panel rounded-xl p-4 border-l-4 border-green-500">
                     <div class="flex justify-between items-center">
-                        <span class="text-gray-400 text-sm" data-i18n="alerts.improving">Improving</span>
-                        <span class="text-2xl font-bold text-green-400">12</span>
+                        <span class="text-gray-400 text-sm">Cameras Reporting</span>
+                        <span class="text-2xl font-bold text-green-400" id="cameraReportingCount">0</span>
                     </div>
-                    <p class="text-xs text-gray-500 mt-1">Residential areas, Parks</p>
+                    <p class="text-xs text-gray-500 mt-1">Camera points shown on map for selected date</p>
                 </div>
             </div>
         </div>
@@ -89,6 +116,9 @@
     <script src="../js/auth.js"></script>
     <script src="../js/translation.js"></script>
     <script src="../js/components.js"></script>
+    <script>
+      window.TRAFFIC_MAP_API_URL = "https://kingkoolkat--ecotrack-inference-traffic-map.modal.run";
+    </script>
     <script src="../js/main.js"></script>
 </body>
 </html>

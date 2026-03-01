@@ -1,5 +1,6 @@
 document.body.insertAdjacentHTML('afterbegin', createNavigation());
 const CHAT_API_URL = window.CHAT_API_URL || '/chat';
+const TRAFFIC_MAP_API_URL = window.TRAFFIC_MAP_API_URL || '/traffic_map';
 const isHomePage = window.location.pathname === '/' || window.location.pathname.endsWith('/index.html');
 let sectionsReadyPromise = Promise.resolve();
 let userLocation = null;
@@ -162,8 +163,326 @@ async function scrollToSection(id, { behavior = 'smooth', persist = true } = {})
 }
 
 // Initialize Map
-let map, heatLayer, markers = [];
+let map;
+let trafficMarkers = [];
+let trafficDates = [];
+let selectedTrafficDate = null;
+const trafficPopupCharts = {};
 let pulseMarkers = [];
+const PULSE_RADIUS_DIVISOR = 48;
+
+function setTrafficMapStatus(message, isError = false) {
+    const status = document.getElementById('trafficMapStatus');
+    if (!status) return;
+    status.textContent = message;
+    status.classList.toggle('text-red-500', isError);
+}
+
+function formatCount(value) {
+    const numeric = Number(value || 0);
+    if (!Number.isFinite(numeric)) return '0';
+    return numeric.toLocaleString();
+}
+
+function colorFromIntensity(intensity) {
+    const clamped = Math.max(0, Math.min(1, Number(intensity) || 0));
+    if (clamped > 0.7) return '#ff3366';
+    if (clamped > 0.4) return '#ffaa00';
+    return '#00ff88';
+}
+
+function clearTrafficMarkers() {
+    Object.keys(trafficPopupCharts).forEach((canvasId) => destroyPopupChart(canvasId));
+    trafficMarkers.forEach((layer) => {
+        if (map && map.hasLayer(layer)) {
+            map.removeLayer(layer);
+        }
+    });
+    trafficMarkers = [];
+    pulseMarkers = [];
+}
+
+function updatePulseMarkers() {
+    if (!map) return;
+    const currentZoom = map.getZoom();
+
+    pulseMarkers.forEach((pulse) => {
+        const scale = map.getZoomScale(currentZoom, pulse.baseZoom);
+        const newRadius = (pulse.circleRadius / PULSE_RADIUS_DIVISOR) * scale;
+        const element = pulse.marker.getElement();
+        if (!element) return;
+
+        const ring = element.querySelector('.pulse-ring');
+        if (!ring) return;
+
+        ring.style.width = `${newRadius}px`;
+        ring.style.height = `${newRadius}px`;
+        ring.style.top = `-${newRadius / 2}px`;
+        ring.style.left = `-${newRadius / 2}px`;
+    });
+}
+
+function updateTrafficSummary(summary) {
+    const heavyCount = document.getElementById('heavyCameraCount');
+    const totalVehicles = document.getElementById('totalVehiclesCount');
+    const camerasReporting = document.getElementById('cameraReportingCount');
+    if (heavyCount) heavyCount.textContent = formatCount(summary.heavy_count);
+    if (totalVehicles) totalVehicles.textContent = formatCount(summary.total_unique_vehicles);
+    if (camerasReporting) camerasReporting.textContent = formatCount(summary.camera_count);
+}
+
+function updateTrafficDateControls(selectedDate, availableDates) {
+    trafficDates = Array.isArray(availableDates) ? availableDates : [];
+    selectedTrafficDate = selectedDate || null;
+
+    const label = document.getElementById('trafficDateLabel');
+    const slider = document.getElementById('trafficDateSlider');
+    const minDate = document.getElementById('trafficDateMin');
+    const maxDate = document.getElementById('trafficDateMax');
+
+    if (label) {
+        label.textContent = selectedTrafficDate || 'No data';
+    }
+
+    if (!slider || trafficDates.length === 0) {
+        if (slider) slider.disabled = true;
+        if (minDate) minDate.textContent = '--';
+        if (maxDate) maxDate.textContent = '--';
+        return;
+    }
+
+    const selectedIndex = Math.max(0, trafficDates.indexOf(selectedTrafficDate));
+    slider.min = '0';
+    slider.max = String(trafficDates.length - 1);
+    slider.step = '1';
+    slider.value = String(selectedIndex);
+    slider.disabled = false;
+
+    if (minDate) minDate.textContent = trafficDates[0];
+    if (maxDate) maxDate.textContent = trafficDates[trafficDates.length - 1];
+
+    if (slider.dataset.bound !== 'true') {
+        slider.dataset.bound = 'true';
+        slider.addEventListener('input', (event) => {
+            const idx = Number(event.target.value);
+            if (label && trafficDates[idx]) {
+                label.textContent = trafficDates[idx];
+            }
+        });
+        slider.addEventListener('change', async (event) => {
+            const idx = Number(event.target.value);
+            const date = trafficDates[idx];
+            if (date) {
+                await loadTrafficMap(date);
+            }
+        });
+    }
+}
+
+function destroyPopupChart(canvasId) {
+    if (trafficPopupCharts[canvasId]) {
+        trafficPopupCharts[canvasId].destroy();
+        delete trafficPopupCharts[canvasId];
+    }
+}
+
+function renderVehiclePieChart(canvasId, camera) {
+    if (typeof Chart === 'undefined') return;
+
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+
+    destroyPopupChart(canvasId);
+
+    const values = [
+        Number(camera.car_count || 0),
+        Number(camera.bus_count || 0),
+        Number(camera.truck_count || 0),
+        Number(camera.motorcycle_count || 0),
+    ];
+
+    const total = values.reduce((sum, value) => sum + value, 0);
+    if (total <= 0) return;
+
+    trafficPopupCharts[canvasId] = new Chart(canvas, {
+        type: 'pie',
+        data: {
+            labels: ['Cars', 'Buses', 'Trucks', 'Motorcycles'],
+            datasets: [{
+                data: values,
+                backgroundColor: ['#60a5fa', '#f59e0b', '#ef4444', '#22c55e'],
+                borderColor: ['#1d4ed8', '#b45309', '#b91c1c', '#15803d'],
+                borderWidth: 1,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    labels: {
+                        boxWidth: 10,
+                        color: '#374151',
+                        font: {
+                            size: 10,
+                        },
+                    },
+                },
+                tooltip: {
+                    callbacks: {
+                        label(context) {
+                            const value = Number(context.raw || 0);
+                            const pct = total > 0 ? ((value / total) * 100).toFixed(1) : '0.0';
+                            return `${context.label}: ${formatCount(value)} (${pct}%)`;
+                        },
+                    },
+                },
+            },
+        },
+    });
+}
+
+function cameraPopupHtml(camera, chartCanvasId) {
+    const cameraName = camera.camera_name || `Camera ${camera.camera_id}`;
+    const lat = Number(camera.latitude).toFixed(5);
+    const lng = Number(camera.longitude).toFixed(5);
+    return `
+        <div class="p-2 text-sm">
+            <h3 class="font-bold mb-1">${cameraName}</h3>
+            <p class="text-xs text-gray-500 mb-2">ID ${camera.camera_id} | ${lat}, ${lng}</p>
+            <div class="space-y-1">
+                <p><strong>Total vehicles:</strong> ${formatCount(camera.total_unique_vehicles)}</p>
+                <p><strong>Cars:</strong> ${formatCount(camera.car_count)}</p>
+                <p><strong>Buses:</strong> ${formatCount(camera.bus_count)}</p>
+                <p><strong>Trucks:</strong> ${formatCount(camera.truck_count)}</p>
+                <p><strong>Motorcycles:</strong> ${formatCount(camera.motorcycle_count)}</p>
+                <p><strong>Peak/frame:</strong> ${formatCount(camera.peak_vehicles_per_frame)}</p>
+            </div>
+            <div class="mt-3">
+                <div class="text-xs font-semibold mb-1">Vehicle Mix</div>
+                <div style="height: 180px;">
+                    <canvas id="${chartCanvasId}"></canvas>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderTrafficMarkers(cameras) {
+    clearTrafficMarkers();
+    if (!map) return;
+
+    const bounds = [];
+    cameras.forEach((camera) => {
+        const lat = Number(camera.latitude);
+        const lng = Number(camera.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+        const intensity = Number(camera.intensity || 0);
+        const markerColor = colorFromIntensity(intensity);
+        const circleRadius = 400 * (1 + intensity * 2);
+
+        const circle = L.circle([lat, lng], {
+            radius: circleRadius,
+            color: markerColor,
+            weight: 1,
+            fillColor: markerColor,
+            fillOpacity: 0.25,
+            opacity: 0.4,
+        }).addTo(map);
+
+        if (intensity > 0.7) {
+            const initialRadius = circleRadius / PULSE_RADIUS_DIVISOR;
+            const pulseIcon = L.divIcon({
+                className: 'pulse-marker',
+                html: `
+                    <div class="pulse-ring"
+                        style="
+                            border: 2px solid ${markerColor};
+                            width: ${initialRadius}px;
+                            height: ${initialRadius}px;
+                            border-radius: 50%;
+                            position: absolute;
+                            top: -${initialRadius / 2}px;
+                            left: -${initialRadius / 2}px;">
+                    </div>
+                `,
+                iconSize: [0, 0]
+            });
+
+            const pulseMarker = L.marker([lat, lng], { icon: pulseIcon }).addTo(map);
+            pulseMarkers.push({
+                marker: pulseMarker,
+                circleRadius: circleRadius,
+                baseZoom: map.getZoom(),
+            });
+            trafficMarkers.push(pulseMarker);
+        }
+
+        const chartCanvasId = `vehiclePie-${camera.camera_id}-${Math.random().toString(36).slice(2, 8)}`;
+        const popupHtml = cameraPopupHtml(camera, chartCanvasId);
+
+        circle.bindPopup(popupHtml, { maxWidth: 360 });
+
+        const onPopupOpen = () => {
+            setTimeout(() => renderVehiclePieChart(chartCanvasId, camera), 0);
+        };
+        const onPopupClose = () => {
+            destroyPopupChart(chartCanvasId);
+        };
+
+        circle.on('popupopen', onPopupOpen);
+        circle.on('popupclose', onPopupClose);
+
+        trafficMarkers.push(circle);
+        bounds.push([lat, lng]);
+    });
+
+    if (bounds.length > 0) {
+        map.fitBounds(bounds, { padding: [30, 30], maxZoom: 13 });
+    }
+}
+
+async function fetchTrafficMapData(date = null) {
+    const url = new URL(TRAFFIC_MAP_API_URL, window.location.href);
+    if (date) {
+        url.searchParams.set('date', date);
+    }
+
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+        throw new Error(`Traffic map request failed with status ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (data.error) {
+        throw new Error(data.error);
+    }
+    return data;
+}
+
+async function loadTrafficMap(date = null) {
+    try {
+        setTrafficMapStatus('Loading traffic data...');
+        const data = await fetchTrafficMapData(date);
+        const summary = data.summary || {};
+        const cameras = Array.isArray(data.cameras) ? data.cameras : [];
+
+        updateTrafficDateControls(data.selected_date, data.available_dates || []);
+        updateTrafficSummary(summary);
+        renderTrafficMarkers(cameras);
+
+        const selectedDateText = data.selected_date || 'n/a';
+        setTrafficMapStatus(`Showing ${formatCount(summary.camera_count)} cameras for ${selectedDateText}`);
+    } catch (error) {
+        console.error('Failed to load traffic map data', error);
+        updateTrafficDateControls(null, []);
+        updateTrafficSummary({ camera_count: 0, heavy_count: 0, total_unique_vehicles: 0 });
+        clearTrafficMarkers();
+        setTrafficMapStatus(`Unable to load traffic data: ${error.message}`, true);
+    }
+}
 
 function initMap() {
     const chicagoBounds = L.latLngBounds(
@@ -176,8 +495,8 @@ function initMap() {
         maxZoom: 18,
         maxBounds: chicagoBounds,
         maxBoundsViscosity: 1.0
-    }).setView([41.8781, -87.6298], 11);
-    
+    }).setView([41.8781, -87.6298], 12);
+
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
         subdomains: 'abcd',
@@ -186,111 +505,15 @@ function initMap() {
     }).addTo(map);
 
     map.fitBounds(chicagoBounds);
-    
-    // Add simulated heat map data points
-    const heatPoints = [
-        [41.8781, -87.6298, 0.9],  // Loop - high
-        [41.8917, -87.6078, 0.8],  // Near North - high
-        [41.8240, -87.6324, 0.6],  // Near South - medium
-        [41.9668, -87.6887, 0.4],  // North Side - low
-        [41.7520, -87.6120, 0.7],  // Industrial corridor - high
-        [41.8400, -87.6500, 0.5],  // South Loop edge - medium
-        [41.9800, -87.7200, 0.3],  // Residential northwest - low
-        [41.8850, -87.7000, 0.85], // West corridor - high
-    ];
-    
-    // Create custom markers with pulsing effect for critical areas
-    heatPoints.forEach((point, idx) => {
-        const intensity = point[2];
-        let color = intensity > 0.7 ? '#ff3366' : intensity > 0.4 ? '#ffaa00' : '#00ff88';
-        
-        const baseRadius = 400; // meters
-        const circleRadius = baseRadius * (1 + intensity * 2);
-        const marker = L.circle([point[0], point[1]], {
-            radius: circleRadius,
-            fillColor: color,
-            color: color,
-            weight: 1,
-            opacity: 0.4,
-            fillOpacity: 0.25
-        }).addTo(map);
-        
-        // Add pulsing effect for high intensity
-        if (intensity > 0.7) {
-            const initialRadius = circleRadius / 24 / 12 * map.getZoom();
-
-            const pulseIcon = L.divIcon({
-                className: 'pulse-marker',
-                html: `
-                    <div class="pulse-ring"
-                        style="
-                            border: 2px solid ${color};
-                            width: ${initialRadius}px;
-                            height: ${initialRadius}px;
-                            border-radius: 50%;
-                            position: absolute;
-                            top: -${initialRadius / 2}px;
-                            left: -${initialRadius / 2}px;">
-                    </div>
-                `,
-                iconSize: [0, 0]
-            });
-
-            const pulseMarker = L.marker([point[0], point[1]], { icon: pulseIcon }).addTo(map);
-
-            pulseMarkers.push({
-                marker: pulseMarker,
-                circleRadius: circleRadius,
-                color: color,
-                lat: point[0],
-                lng: point[1],
-                baseZoom: map.getZoom()
-            });
-        }
-        
-        marker.bindPopup(`
-            <div class="p-2">
-                <h3 class="font-bold mb-1">Zone ${idx + 1}</h3>
-                <p class="text-sm">Emissions: ${(intensity * 200).toFixed(0)} ppm</p>
-                <p class="text-sm">Traffic: ${intensity > 0.7 ? 'Heavy' : intensity > 0.4 ? 'Moderate' : 'Light'}</p>
-                <button onclick="zoomToZone(${point[0]}, ${point[1]})" class="mt-2 px-3 py-1 bg-blue-500 text-white rounded text-xs">Analyze</button>
-            </div>
-        `);
-        
-        markers.push(marker);
-    });
-
     map.on('zoom', updatePulseMarkers);
-}
-
-function updatePulseMarkers() {
-    const currentZoom = map.getZoom();
-
-    pulseMarkers.forEach(p => {
-        const scale = map.getZoomScale(currentZoom, p.baseZoom);
-        const newRadius = p.circleRadius / 24 * scale;
-
-        const el = p.marker.getElement();
-        if (!el) return;
-
-        const ring = el.querySelector('.pulse-ring');
-        if (!ring) return;
-
-        ring.style.width = `${newRadius}px`;
-        ring.style.height = `${newRadius}px`;
-        ring.style.top = `-${newRadius / 2}px`;
-        ring.style.left = `-${newRadius / 2}px`;
-    });
-}
-
-function zoomToZone(lat, lng) {
-    map.setView([lat, lng], 16);
+    loadTrafficMap();
 }
 
 function toggleLayer(type) {
     const btn = document.getElementById(`btn-${type}`);
-    btn.classList.toggle('opacity-50');
-    // In real implementation, this would toggle map layers
+    if (btn) {
+        btn.classList.toggle('opacity-50');
+    }
 }
 
 // Camera and Video Upload

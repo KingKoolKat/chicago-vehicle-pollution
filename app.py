@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import datetime
 from typing import Dict, Any, List, Optional, Tuple
 
 import modal
@@ -257,6 +258,153 @@ def _persist_detector_output(
         if conn is not None:
             conn.close()
     return db_write_status
+
+
+def _to_float(value: Any) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_date(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        return datetime.date.fromisoformat(value).isoformat()
+    except ValueError:
+        return None
+
+
+def _traffic_level(intensity: float) -> str:
+    if intensity >= 0.67:
+        return "heavy"
+    if intensity >= 0.34:
+        return "moderate"
+    return "light"
+
+
+def _get_available_traffic_dates(conn) -> List[str]:
+    rows = _query_rows(
+        conn,
+        f"""
+        SELECT TO_CHAR(DATE(recorded_at), 'YYYY-MM-DD') AS traffic_date
+        FROM {CAMERA_INFO_TABLE}
+        GROUP BY 1
+        ORDER BY 1
+        """,
+    )
+    return [str(row["traffic_date"]) for row in rows if row.get("traffic_date")]
+
+
+def _get_traffic_camera_rows(conn, selected_date: str) -> List[Dict[str, Any]]:
+    return _query_rows(
+        conn,
+        f"""
+        SELECT
+          c.camera_id,
+          c.camera_name,
+          c.latitude,
+          c.longitude,
+          COALESCE(SUM(ci.car_count), 0) AS car_count,
+          COALESCE(SUM(ci.bus_count), 0) AS bus_count,
+          COALESCE(SUM(ci.truck_count), 0) AS truck_count,
+          COALESCE(SUM(ci.motorcycle_count), 0) AS motorcycle_count,
+          COALESCE(SUM(ci.total_unique_vehicles), 0) AS total_unique_vehicles,
+          COALESCE(MAX(ci.peak_vehicles_per_frame), 0) AS peak_vehicles_per_frame
+        FROM {CAMERAS_TABLE} c
+        LEFT JOIN {CAMERA_INFO_TABLE} ci
+          ON ci.camera_id = c.camera_id
+         AND DATE(ci.recorded_at) = TO_DATE(%s)
+        WHERE c.latitude IS NOT NULL
+          AND c.longitude IS NOT NULL
+        GROUP BY c.camera_id, c.camera_name, c.latitude, c.longitude
+        ORDER BY total_unique_vehicles DESC, c.camera_id ASC
+        """,
+        (selected_date,),
+    )
+
+
+def _build_traffic_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    cameras: List[Dict[str, Any]] = []
+    max_total = 0
+    totals = {
+        "car_count": 0,
+        "bus_count": 0,
+        "truck_count": 0,
+        "motorcycle_count": 0,
+        "total_unique_vehicles": 0,
+    }
+
+    for row in rows:
+        car_count = _to_int(row.get("car_count"))
+        bus_count = _to_int(row.get("bus_count"))
+        truck_count = _to_int(row.get("truck_count"))
+        motorcycle_count = _to_int(row.get("motorcycle_count"))
+        summed_by_class = car_count + bus_count + truck_count + motorcycle_count
+        total_unique = max(_to_int(row.get("total_unique_vehicles")), summed_by_class)
+        max_total = max(max_total, total_unique)
+
+        totals["car_count"] += car_count
+        totals["bus_count"] += bus_count
+        totals["truck_count"] += truck_count
+        totals["motorcycle_count"] += motorcycle_count
+        totals["total_unique_vehicles"] += total_unique
+
+        cameras.append(
+            {
+                "camera_id": _to_int(row.get("camera_id")),
+                "camera_name": str(row.get("camera_name") or f"Camera {_to_int(row.get('camera_id'))}"),
+                "latitude": _to_float(row.get("latitude")),
+                "longitude": _to_float(row.get("longitude")),
+                "car_count": car_count,
+                "bus_count": bus_count,
+                "truck_count": truck_count,
+                "motorcycle_count": motorcycle_count,
+                "total_unique_vehicles": total_unique,
+                "peak_vehicles_per_frame": _to_int(row.get("peak_vehicles_per_frame")),
+            }
+        )
+
+    heavy_count = 0
+    moderate_count = 0
+    light_count = 0
+    scale_denom = max_total if max_total > 0 else 1
+
+    for camera in cameras:
+        intensity = camera["total_unique_vehicles"] / scale_denom
+        level = _traffic_level(intensity)
+        camera["intensity"] = round(float(intensity), 4)
+        camera["traffic_level"] = level
+        if level == "heavy":
+            heavy_count += 1
+        elif level == "moderate":
+            moderate_count += 1
+        else:
+            light_count += 1
+
+    return {
+        "cameras": cameras,
+        "summary": {
+            "camera_count": len(cameras),
+            "heavy_count": heavy_count,
+            "moderate_count": moderate_count,
+            "light_count": light_count,
+            "max_total_unique_vehicles": max_total,
+            **totals,
+        },
+    }
 
 
 def _image_suffix(filename: Optional[str]) -> str:
@@ -559,6 +707,57 @@ async def upload_image_and_count(request: Request) -> Dict[str, Any]:
         "db_write_status": db_write_status,
         **out,
     }
+
+
+@app.function(secrets=[snowflake_secret])
+@modal.fastapi_endpoint(method="GET")
+async def traffic_map(request: Request) -> Dict[str, Any]:
+    """
+    HTTP endpoint:
+      GET with optional query params:
+        - date: YYYY-MM-DD (optional)
+    Returns:
+      - selected date, available dates
+      - per-camera traffic counts and normalized intensity
+      - summary totals
+    """
+    requested_date = _parse_date(request.query_params.get("date"))
+    conn = None
+    try:
+        conn = _snowflake_connect()
+        available_dates = _get_available_traffic_dates(conn)
+        if not available_dates:
+            return {
+                "selected_date": None,
+                "available_dates": [],
+                "cameras": [],
+                "summary": {
+                    "camera_count": 0,
+                    "heavy_count": 0,
+                    "moderate_count": 0,
+                    "light_count": 0,
+                    "max_total_unique_vehicles": 0,
+                    "car_count": 0,
+                    "bus_count": 0,
+                    "truck_count": 0,
+                    "motorcycle_count": 0,
+                    "total_unique_vehicles": 0,
+                },
+            }
+
+        selected_date = requested_date if requested_date in available_dates else available_dates[-1]
+        rows = _get_traffic_camera_rows(conn, selected_date)
+        payload = _build_traffic_payload(rows)
+        payload["selected_date"] = selected_date
+        payload["available_dates"] = available_dates
+        payload["requested_date"] = requested_date
+        return payload
+    except Exception as exc:
+        return {"error": f"Traffic map endpoint failed: {exc}"}
+    finally:
+        if conn is not None:
+            conn.close()
+
 
 @app.function(secrets=[snowflake_secret])
 @modal.fastapi_endpoint(method="POST")
