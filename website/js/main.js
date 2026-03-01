@@ -263,7 +263,7 @@ let cameraJumpPoints = [];
 let activeCameraJumpId = null;
 let mapArrowNavigationBound = false;
 let hasAutoFitted = false;
-const PULSE_RADIUS_DIVISOR = 55;
+const PULSE_RADIUS_DIVISOR = 13;
 const CAMERA_HIT_RADIUS_PX = 14;
 const HEATMAP_CONFIG = window.HEATMAP_CONFIG || {};
 const HEATMAP_POLLUTANTS = HEATMAP_CONFIG.POLLUTANTS || {};
@@ -553,7 +553,7 @@ function updatePulseMarkers() {
     const currentZoom = map.getZoom();
 
     pulseMarkers.forEach((pulse) => {
-        const scale = map.getZoomScale(currentZoom, pulse.baseZoom);
+        const scale = map.getZoomScale(currentZoom, 12);
         const newRadius = (toSafeNumber(pulse.circleRadius) / PULSE_RADIUS_DIVISOR) * scale;
         const element = pulse.marker.getElement();
         if (!element) return;
@@ -1045,7 +1045,7 @@ function renderHeatmapMarkers(cameras) {
         }).addTo(map);
 
         if (intensity > 0.7) {
-            const initialRadius = circleRadius / PULSE_RADIUS_DIVISOR;
+            const initialRadius = circleRadius / PULSE_RADIUS_DIVISOR * map.getZoomScale(map.getZoom(), 12);
             const pulseIcon = L.divIcon({
                 className: 'pulse-marker',
                 html: `
