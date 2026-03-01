@@ -191,7 +191,16 @@
             avatarUrl: (avatarUrl || "").trim()
         });
         if (result.ok) {
-            setStoredSession(token, result.user);
+            const currentUser = getSessionUser() || {};
+            const mergedUser = sanitizeUser({
+                ...currentUser,
+                ...(result.user || {}),
+                name: (name || "").trim() || (result.user && result.user.name) || currentUser.name || "",
+                role: role || (result.user && result.user.role) || currentUser.role || "resident",
+                avatarUrl: (avatarUrl || "").trim() || (result.user && result.user.avatarUrl) || currentUser.avatarUrl || ""
+            });
+            setStoredSession(token, mergedUser);
+            result.user = mergedUser;
         }
         return result;
     }

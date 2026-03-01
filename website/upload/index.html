@@ -179,7 +179,7 @@
     <script>
         const RESIDENT_REPORT_API_URL = window.RESIDENT_REPORT_API_URL || "/submit_resident_report";
         const ADMIN_VIDEO_API_URL = window.ADMIN_VIDEO_API_URL || "/admin_process_video";
-        const TRAFFIC_MAP_API_URL = window.TRAFFIC_MAP_API_URL || "/traffic_map";
+        const UPLOAD_TRAFFIC_MAP_API_URL = window.TRAFFIC_MAP_API_URL || "/traffic_map";
 
         let residentSelectedFile = null;
         let adminCameraRecords = [];
@@ -313,7 +313,7 @@
             const select = document.getElementById("adminCameraSelect");
             select.innerHTML = "<option value=''>Loading cameras...</option>";
             try {
-                const res = await fetch(TRAFFIC_MAP_API_URL);
+                const res = await fetch(UPLOAD_TRAFFIC_MAP_API_URL);
                 const data = await res.json();
                 const cameras = Array.isArray(data.cameras) ? data.cameras : [];
                 adminCameraRecords = cameras

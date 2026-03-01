@@ -2,6 +2,7 @@ document.body.insertAdjacentHTML('afterbegin', createNavigation());
 const CHAT_API_URL = window.CHAT_API_URL || '/chat';
 const CHAT_TEST_MODE = window.CHAT_TEST_MODE === true;
 const TRAFFIC_MAP_API_URL = window.TRAFFIC_MAP_API_URL || '/traffic_map';
+const LANGUAGE_KEY = 'ecotrack_language';
 const isHomePage = window.location.pathname === '/' || window.location.pathname.endsWith('/index.html');
 let sectionsReadyPromise = Promise.resolve();
 let userLocation = null;
@@ -51,6 +52,35 @@ function applyTranslations(lang) {
     });
 }
 
+function getSavedLanguage() {
+    try {
+        const saved = localStorage.getItem(LANGUAGE_KEY);
+        if (saved && translations[saved]) return saved;
+    } catch (error) {
+        console.error('Unable to read saved language', error);
+    }
+    return 'en';
+}
+
+function saveLanguage(lang) {
+    try {
+        localStorage.setItem(LANGUAGE_KEY, lang);
+    } catch (error) {
+        console.error('Unable to persist language', error);
+    }
+}
+
+function applySavedLanguage() {
+    const savedLang = getSavedLanguage();
+    const languageSelect = document.getElementById('languageSelect');
+    if (languageSelect && translations[savedLang]) {
+        languageSelect.value = savedLang;
+    }
+    applyTranslations(savedLang);
+    updateHeatmapTitle();
+    return savedLang;
+}
+
 function updateHeatmapTitle() {
     const title = document.getElementById('heatmapTitle');
     if (!title) return;
@@ -64,9 +94,12 @@ function updateHeatmapTitle() {
 
 // Language Switcher
 document.getElementById('languageSelect').addEventListener('change', (e) => {
-    applyTranslations(e.target.value);
+    const lang = e.target.value;
+    saveLanguage(lang);
+    applyTranslations(lang);
     updateHeatmapTitle();
 });
+applySavedLanguage();
 
 function waitForElementById(id, retries = 30, delayMs = 100) {
     return new Promise((resolve) => {
@@ -155,6 +188,8 @@ async function injectSectionsOnHomePage() {
             console.error(`Failed to inject ${section.url} (${section.selector})`, error);
         }
     }
+
+    applySavedLanguage();
 }
 
 async function scrollToSection(id, { behavior = 'smooth', persist = true } = {}) {
@@ -1680,8 +1715,7 @@ window.onload = async function() {
         await scrollToSection(requestedSection, { behavior: 'auto', persist: true });
     }
 
-    const selectedLang = document.getElementById('languageSelect')?.value || 'en';
-    applyTranslations(selectedLang);
+    applySavedLanguage();
     setupDropZoneHandlers();
 
     if (!document.getElementById('map') && document.getElementById('vehiclesYesterday')) {

@@ -142,6 +142,7 @@
             document.getElementById("newPassword").value = "";
             document.getElementById("confirmPassword").value = "";
             setStatus("profileStatus", hasPasswordInput ? "Profile and password updated successfully." : "Profile updated successfully.", false);
+            setTimeout(() => window.location.reload(), 350);
         });
 
         async function initProfileSession() {
