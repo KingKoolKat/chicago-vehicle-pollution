@@ -51,6 +51,17 @@ body {
     width: 100%;
     border-radius: 12px;
     z-index: 1;
+    background: #111827;
+}
+
+/* Reduce visible tile seam artifacts (thin white lines) in Leaflet maps. */
+#map .leaflet-container {
+    background: #111827;
+}
+
+#map .leaflet-tile {
+    outline: 1px solid transparent;
+    border: 0 !important;
 }
 
 .chat-message {

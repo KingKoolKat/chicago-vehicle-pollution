@@ -208,7 +208,26 @@ let trafficDates = [];
 let selectedTrafficDate = null;
 const trafficPopupCharts = {};
 let pulseMarkers = [];
+let cameraJumpPoints = [];
+let activeCameraJumpId = null;
+let mapArrowNavigationBound = false;
 const PULSE_RADIUS_DIVISOR = 57;
+const CAMERA_HIT_RADIUS_PX = 14;
+const HEATMAP_CONFIG = window.HEATMAP_CONFIG || {};
+const HEATMAP_POLLUTANTS = HEATMAP_CONFIG.POLLUTANTS || {};
+const HEATMAP_DEFAULT_POLLUTANT = HEATMAP_CONFIG.DEFAULT_POLLUTANT || 'CO2';
+const HEATMAP_DEFAULT_METRIC = HEATMAP_CONFIG.DEFAULT_METRIC || 'total';
+const HEATMAP_CONGESTION_K = Number(HEATMAP_CONFIG.CONGESTION_MULTIPLIER_K || 0.5);
+const HEATMAP_COLOR_PALETTES = HEATMAP_CONFIG.COLOR_PALETTES || {};
+const HEATMAP_RADIUS_CONFIG = HEATMAP_CONFIG.DIFFUSION_RADIUS_METERS || {};
+const HEATMAP_TRAFFIC_RADIUS_METERS = Math.max(100, Number(HEATMAP_RADIUS_CONFIG.traffic || 300));
+const HEATMAP_EMISSIONS_RADIUS_METERS = Math.max(100, Number(HEATMAP_RADIUS_CONFIG.emissions || 1200));
+
+let heatmapMode = 'traffic';
+let selectedPollutant = HEATMAP_DEFAULT_POLLUTANT;
+let selectedEmissionMetric = HEATMAP_DEFAULT_METRIC === 'intensity' ? 'intensity' : 'total';
+let latestTrafficPayload = null;
+const emissionsCongestionCache = new Map();
 
 function setTrafficMapStatus(message, isError = false) {
     const status = document.getElementById('trafficMapStatus');
@@ -223,11 +242,98 @@ function formatCount(value) {
     return numeric.toLocaleString();
 }
 
+function formatMeasure(value, fractionDigits = 2) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '0';
+    return numeric.toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: fractionDigits,
+    });
+}
+
+function toSafeNumber(value, fallback = 0) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function clamp01(value) {
+    return Math.max(0, Math.min(1, Number(value) || 0));
+}
+
+function percentileFromSorted(sortedValues, percentile) {
+    if (!Array.isArray(sortedValues) || sortedValues.length === 0) return 0;
+    if (sortedValues.length === 1) return toSafeNumber(sortedValues[0], 0);
+
+    const p = clamp01(percentile);
+    const index = (sortedValues.length - 1) * p;
+    const lower = Math.floor(index);
+    const upper = Math.ceil(index);
+    const lowerValue = toSafeNumber(sortedValues[lower], 0);
+    const upperValue = toSafeNumber(sortedValues[upper], lowerValue);
+
+    if (lower === upper) return lowerValue;
+    const weight = index - lower;
+    return lowerValue + (upperValue - lowerValue) * weight;
+}
+
+function trafficLevelFromIntensity(intensity) {
+    const clamped = clamp01(intensity);
+    if (clamped >= 0.67) return 'heavy';
+    if (clamped >= 0.34) return 'moderate';
+    return 'light';
+}
+
 function colorFromIntensity(intensity) {
-    const clamped = Math.max(0, Math.min(1, Number(intensity) || 0));
-    if (clamped > 0.7) return '#ff3366';
-    if (clamped > 0.4) return '#ffaa00';
-    return '#00ff88';
+    const clamped = clamp01(intensity);
+    const palette = resolveCurrentColorPalette();
+
+    if (clamped > 0.7) return palette.high;
+    if (clamped > 0.4) return palette.medium;
+    return palette.low;
+}
+
+function resolveCurrentColorPalette() {
+    const trafficFallback = {
+        low: '#00ff88',
+        medium: '#ffaa00',
+        high: '#ff3366',
+    };
+    const emissionsFallback = {
+        low: '#39c5ff',
+        medium: '#8b5cf6',
+        high: '#ff4fd8',
+    };
+
+    const modeFallback = heatmapMode === 'emissions' ? emissionsFallback : trafficFallback;
+    const configuredPalette = heatmapMode === 'emissions'
+        ? (HEATMAP_COLOR_PALETTES.emissions || {})
+        : (HEATMAP_COLOR_PALETTES.traffic || {});
+
+    return {
+        low: configuredPalette.low || modeFallback.low,
+        medium: configuredPalette.medium || modeFallback.medium,
+        high: configuredPalette.high || modeFallback.high,
+    };
+}
+
+function currentDiffusionRadiusMeters() {
+    return heatmapMode === 'emissions'
+        ? HEATMAP_EMISSIONS_RADIUS_METERS
+        : HEATMAP_TRAFFIC_RADIUS_METERS;
+}
+
+function updateHeatmapLegend() {
+    const lowScaleLabel = document.getElementById('legendScaleLow');
+    const highScaleLabel = document.getElementById('legendScaleHigh');
+    const gradientBar = document.querySelector('.heatmap-legend');
+
+    if (lowScaleLabel) lowScaleLabel.textContent = 'Low';
+    if (highScaleLabel) highScaleLabel.textContent = 'High';
+
+    if (gradientBar) {
+        const palette = resolveCurrentColorPalette();
+        gradientBar.style.background = `linear-gradient(to right, ${palette.low} 0%, ${palette.medium} 55%, ${palette.high} 100%)`;
+    }
 }
 
 function clearTrafficMarkers() {
@@ -239,6 +345,7 @@ function clearTrafficMarkers() {
     });
     trafficMarkers = [];
     pulseMarkers = [];
+    cameraJumpPoints = [];
 }
 
 function updatePulseMarkers() {
@@ -247,7 +354,7 @@ function updatePulseMarkers() {
 
     pulseMarkers.forEach((pulse) => {
         const scale = map.getZoomScale(currentZoom, pulse.baseZoom);
-        const newRadius = (pulse.circleRadius / PULSE_RADIUS_DIVISOR) * scale;
+        const newRadius = (toSafeNumber(pulse.circleRadius) / PULSE_RADIUS_DIVISOR) * scale;
         const element = pulse.marker.getElement();
         if (!element) return;
 
@@ -265,8 +372,28 @@ function updateTrafficSummary(summary) {
     const heavyCount = document.getElementById('heavyCameraCount');
     const totalVehicles = document.getElementById('totalVehiclesCount');
     const camerasReporting = document.getElementById('cameraReportingCount');
+    const heavyLabel = document.getElementById('heavyCameraLabel');
+    const totalLabel = document.getElementById('totalMetricLabel');
+    const totalDescription = document.getElementById('totalMetricDescription');
+
+    if (heavyLabel && summary.heavyLabel) {
+        heavyLabel.textContent = summary.heavyLabel;
+    }
+    if (totalLabel && summary.metricLabel) {
+        totalLabel.textContent = summary.metricLabel;
+    }
+    if (totalDescription && summary.metricDescription) {
+        totalDescription.textContent = summary.metricDescription;
+    }
+
     if (heavyCount) heavyCount.textContent = formatCount(summary.heavy_count);
-    if (totalVehicles) totalVehicles.textContent = formatCount(summary.total_unique_vehicles);
+    if (totalVehicles) {
+        if (summary.metricIsFloat) {
+            totalVehicles.textContent = formatMeasure(summary.metricValue, 2);
+        } else {
+            totalVehicles.textContent = formatCount(summary.metricValue);
+        }
+    }
     if (camerasReporting) camerasReporting.textContent = formatCount(summary.camera_count);
 }
 
@@ -382,12 +509,282 @@ function renderVehiclePieChart(canvasId, camera) {
     });
 }
 
+function congestionCacheKey(dateKey, k) {
+    return `${dateKey || 'no-date'}::k=${k}`;
+}
+
+function buildCongestionCacheForDate(dateKey, cameras, k = HEATMAP_CONGESTION_K) {
+    const key = congestionCacheKey(dateKey, k);
+    const existing = emissionsCongestionCache.get(key);
+    if (existing) return existing;
+
+    const peakValues = cameras
+        .map((camera) => {
+            const peak = Number(camera.peak_vehicles_per_frame);
+            return Number.isFinite(peak) ? peak : null;
+        })
+        .filter((value) => value !== null)
+        .sort((a, b) => a - b);
+
+    const p10 = peakValues.length > 0 ? percentileFromSorted(peakValues, 0.10) : 0;
+    const p90 = peakValues.length > 0 ? percentileFromSorted(peakValues, 0.90) : 0;
+    const hasSpread = Number.isFinite(p10) && Number.isFinite(p90) && p90 > p10;
+    const byCamera = {};
+
+    cameras.forEach((camera) => {
+        const cameraKey = String(camera.camera_id ?? '');
+        const peak = Number(camera.peak_vehicles_per_frame);
+        let z = 0;
+        let alpha = 1;
+
+        if (Number.isFinite(peak) && hasSpread) {
+            z = clamp01((peak - p10) / (p90 - p10));
+            alpha = 1 + (k * z);
+        }
+
+        byCamera[cameraKey] = { z, alpha };
+    });
+
+    const cacheEntry = {
+        key,
+        dateKey,
+        p10,
+        p90,
+        k,
+        byCamera,
+    };
+    emissionsCongestionCache.set(key, cacheEntry);
+    return cacheEntry;
+}
+
+function resolvePollutantConfig(pollutant, EF = HEATMAP_POLLUTANTS) {
+    const pollutantConfig = EF[pollutant] || {};
+    const factors = pollutantConfig.emissionFactors || {};
+    return {
+        pollutant,
+        label: pollutantConfig.label || pollutant,
+        totalUnit: pollutantConfig.totalUnit || 'kg/day',
+        intensityUnit: pollutantConfig.intensityUnit || 'g/vehicle',
+        totalDisplayScale: toSafeNumber(pollutantConfig.totalDisplayScale, 0.001),
+        factors: {
+            car: toSafeNumber(factors.car, 0),
+            truck: toSafeNumber(factors.truck, 0),
+            bus: toSafeNumber(factors.bus, 0),
+            motorcycle: toSafeNumber(factors.motorcycle, 0),
+        },
+    };
+}
+
+/*
+Emissions model per camera/date:
+- z = clamp((P - P10) / (P90 - P10), 0, 1)
+- alpha = 1 + k*z
+- base = Ncar*EFcar + Ntruck*EFtruck + Nbus*EFbus + Nmoto*EFmoto
+- E_total = base * alpha
+- E_intensity = E_total / max(N_total, 1)
+*/
+function computeEmissionsWeights(cameras, options = {}) {
+    const pollutant = options.pollutant || selectedPollutant;
+    const metric = options.metric === 'intensity' ? 'intensity' : 'total';
+    const k = Number.isFinite(Number(options.k)) ? Number(options.k) : HEATMAP_CONGESTION_K;
+    const EF = options.EF || HEATMAP_POLLUTANTS;
+    const dateKey = options.dateKey || selectedTrafficDate || 'no-date';
+    const pollutantConfig = resolvePollutantConfig(pollutant, EF);
+    const congestionCache = buildCongestionCacheForDate(dateKey, cameras, k);
+
+    return cameras.map((camera) => {
+        const counts = {
+            car: toSafeNumber(camera.car_count, 0),
+            truck: toSafeNumber(camera.truck_count, 0),
+            bus: toSafeNumber(camera.bus_count, 0),
+            motorcycle: toSafeNumber(camera.motorcycle_count, 0),
+        };
+
+        const cameraKey = String(camera.camera_id ?? '');
+        const congestion = congestionCache.byCamera[cameraKey] || { z: 0, alpha: 1 };
+
+        const baseBreakdown = {
+            car: counts.car * pollutantConfig.factors.car,
+            truck: counts.truck * pollutantConfig.factors.truck,
+            bus: counts.bus * pollutantConfig.factors.bus,
+            motorcycle: counts.motorcycle * pollutantConfig.factors.motorcycle,
+        };
+
+        const adjustedBreakdown = {
+            car: baseBreakdown.car * congestion.alpha,
+            truck: baseBreakdown.truck * congestion.alpha,
+            bus: baseBreakdown.bus * congestion.alpha,
+            motorcycle: baseBreakdown.motorcycle * congestion.alpha,
+        };
+        const adjustedBreakdownDisplay = {
+            car: adjustedBreakdown.car * pollutantConfig.totalDisplayScale,
+            truck: adjustedBreakdown.truck * pollutantConfig.totalDisplayScale,
+            bus: adjustedBreakdown.bus * pollutantConfig.totalDisplayScale,
+            motorcycle: adjustedBreakdown.motorcycle * pollutantConfig.totalDisplayScale,
+        };
+
+        const baseTotal = baseBreakdown.car + baseBreakdown.truck + baseBreakdown.bus + baseBreakdown.motorcycle;
+        const total = baseTotal * congestion.alpha;
+        const totalDisplay = total * pollutantConfig.totalDisplayScale;
+        const totalVehicles = counts.car + counts.truck + counts.bus + counts.motorcycle;
+        const intensity = total / Math.max(totalVehicles, 1);
+        const denominator = Math.max(totalVehicles, 1);
+        const intensityBreakdown = {
+            car: adjustedBreakdown.car / denominator,
+            truck: adjustedBreakdown.truck / denominator,
+            bus: adjustedBreakdown.bus / denominator,
+            motorcycle: adjustedBreakdown.motorcycle / denominator,
+        };
+        const heatWeight = metric === 'intensity' ? intensity : total;
+
+        return {
+            ...camera,
+            heat_weight: heatWeight,
+            total_unique_vehicles: Math.max(toSafeNumber(camera.total_unique_vehicles, 0), totalVehicles),
+            emissions: {
+                pollutant: pollutantConfig.pollutant,
+                pollutantLabel: pollutantConfig.label,
+                metric,
+                z: congestion.z,
+                alpha: congestion.alpha,
+                p10: congestionCache.p10,
+                p90: congestionCache.p90,
+                total,
+                totalDisplay,
+                intensity,
+                totalVehicles,
+                breakdownTotal: adjustedBreakdown,
+                breakdownTotalDisplay: adjustedBreakdownDisplay,
+                breakdownIntensity: intensityBreakdown,
+                totalUnit: pollutantConfig.totalUnit,
+                intensityUnit: pollutantConfig.intensityUnit,
+            },
+        };
+    });
+}
+
+function computeTrafficWeights(cameras) {
+    return cameras.map((camera) => ({
+        ...camera,
+        heat_weight: toSafeNumber(camera.total_unique_vehicles, 0),
+        emissions: null,
+    }));
+}
+
+function normalizeHeatmapWeights(cameras) {
+    const maxWeight = cameras.reduce(
+        (maxValue, camera) => Math.max(maxValue, toSafeNumber(camera.heat_weight, 0)),
+        0
+    );
+    const denominator = maxWeight > 0 ? maxWeight : 1;
+
+    return cameras.map((camera) => {
+        const weight = toSafeNumber(camera.heat_weight, 0);
+        const intensity = clamp01(weight / denominator);
+        return {
+            ...camera,
+            heat_weight: weight,
+            intensity,
+            traffic_level: trafficLevelFromIntensity(intensity),
+        };
+    });
+}
+
+function buildHeatmapSummary(cameras) {
+    let heavyCount = 0;
+    let moderateCount = 0;
+    let lightCount = 0;
+    let totalVehicles = 0;
+    let totalEmissionsDisplay = 0;
+    let totalEmissionsRaw = 0;
+    let weightedVehicleCount = 0;
+
+    cameras.forEach((camera) => {
+        totalVehicles += toSafeNumber(camera.total_unique_vehicles, 0);
+
+        if (camera.traffic_level === 'heavy') {
+            heavyCount += 1;
+        } else if (camera.traffic_level === 'moderate') {
+            moderateCount += 1;
+        } else {
+            lightCount += 1;
+        }
+
+        if (camera.emissions) {
+            totalEmissionsDisplay += toSafeNumber(camera.emissions.totalDisplay, 0);
+            totalEmissionsRaw += toSafeNumber(camera.emissions.total, 0);
+            weightedVehicleCount += toSafeNumber(camera.emissions.totalVehicles, 0);
+        }
+    });
+
+    if (heatmapMode === 'emissions') {
+        const pollutantMeta = resolvePollutantConfig(selectedPollutant, HEATMAP_POLLUTANTS);
+        const usingIntensity = selectedEmissionMetric === 'intensity';
+        const metricValue = usingIntensity
+            ? (totalEmissionsRaw / Math.max(weightedVehicleCount, 1))
+            : totalEmissionsDisplay;
+
+        return {
+            camera_count: cameras.length,
+            heavy_count: heavyCount,
+            moderate_count: moderateCount,
+            light_count: lightCount,
+            metricValue,
+            metricIsFloat: true,
+            heavyLabel: 'High Emission Cameras',
+            metricLabel: usingIntensity
+                ? `${pollutantMeta.label} Intensity (${pollutantMeta.intensityUnit})`
+                : `Total ${pollutantMeta.label} (${pollutantMeta.totalUnit})`,
+            metricDescription: usingIntensity
+                ? 'Congestion-adjusted emissions per vehicle across all cameras'
+                : 'Congestion-adjusted daily emissions across all cameras',
+        };
+    }
+
+    return {
+        camera_count: cameras.length,
+        heavy_count: heavyCount,
+        moderate_count: moderateCount,
+        light_count: lightCount,
+        metricValue: totalVehicles,
+        metricIsFloat: false,
+        heavyLabel: 'Heavy Traffic Cameras',
+        metricLabel: 'Total Vehicles (Date)',
+        metricDescription: 'Aggregate count from all active cameras',
+    };
+}
+
+function emissionsPopupHtml(camera) {
+    if (!camera.emissions) return '';
+
+    const emissions = camera.emissions;
+    const usingIntensity = emissions.metric === 'intensity';
+    const unit = usingIntensity ? emissions.intensityUnit : emissions.totalUnit;
+    const totalValue = usingIntensity ? emissions.intensity : emissions.totalDisplay;
+    const breakdown = usingIntensity ? emissions.breakdownIntensity : emissions.breakdownTotalDisplay;
+    const metricLabel = usingIntensity ? 'Per-vehicle intensity' : 'Total';
+
+    return `
+        <div class="mt-3 pt-2 border-t border-gray-200">
+            <div class="text-xs font-semibold mb-1">Emissions (${emissions.pollutantLabel}, ${metricLabel})</div>
+            <p><strong>Congestion alpha:</strong> ${formatMeasure(emissions.alpha, 3)} (z=${formatMeasure(emissions.z, 3)})</p>
+            <p><strong>Cars:</strong> ${formatMeasure(breakdown.car, 2)} ${unit}</p>
+            <p><strong>Buses:</strong> ${formatMeasure(breakdown.bus, 2)} ${unit}</p>
+            <p><strong>Trucks:</strong> ${formatMeasure(breakdown.truck, 2)} ${unit}</p>
+            <p><strong>Motorcycles:</strong> ${formatMeasure(breakdown.motorcycle, 2)} ${unit}</p>
+            <p><strong>Total:</strong> ${formatMeasure(totalValue, 2)} ${unit}</p>
+        </div>
+    `;
+}
+
 function cameraPopupHtml(camera, chartCanvasId) {
     const cameraName = camera.camera_name || `Camera ${camera.camera_id}`;
-    const lat = Number(camera.latitude).toFixed(5);
-    const lng = Number(camera.longitude).toFixed(5);
+    const latNum = Number(camera.latitude);
+    const lngNum = Number(camera.longitude);
+    const lat = Number.isFinite(latNum) ? latNum.toFixed(5) : 'n/a';
+    const lng = Number.isFinite(lngNum) ? lngNum.toFixed(5) : 'n/a';
     return `
-        <div class="p-2 text-sm">
+        <div class="p-2 text-sm" style="max-width:min(72vw, 280px); max-height:min(62vh, 380px); overflow-y:auto;">
             <h3 class="font-bold mb-1">${cameraName}</h3>
             <p class="text-xs text-gray-500 mb-2">ID ${camera.camera_id} | ${lat}, ${lng}</p>
             <div class="space-y-1">
@@ -398,9 +795,10 @@ function cameraPopupHtml(camera, chartCanvasId) {
                 <p><strong>Motorcycles:</strong> ${formatCount(camera.motorcycle_count)}</p>
                 <p><strong>Peak/frame:</strong> ${formatCount(camera.peak_vehicles_per_frame)}</p>
             </div>
+            ${emissionsPopupHtml(camera)}
             <div class="mt-3">
                 <div class="text-xs font-semibold mb-1">Vehicle Mix</div>
-                <div style="height: 180px;">
+                <div style="height: 140px;">
                     <canvas id="${chartCanvasId}"></canvas>
                 </div>
             </div>
@@ -408,7 +806,7 @@ function cameraPopupHtml(camera, chartCanvasId) {
     `;
 }
 
-function renderTrafficMarkers(cameras) {
+function renderHeatmapMarkers(cameras) {
     clearTrafficMarkers();
     if (!map) return;
 
@@ -420,7 +818,8 @@ function renderTrafficMarkers(cameras) {
 
         const intensity = Number(camera.intensity || 0);
         const markerColor = colorFromIntensity(intensity);
-        const circleRadius = 400 * (1 + intensity * 2);
+        const baseRadius = currentDiffusionRadiusMeters();
+        const circleRadius = baseRadius * (1 + intensity * 1.8);
 
         const circle = L.circle([lat, lng], {
             radius: circleRadius,
@@ -429,6 +828,8 @@ function renderTrafficMarkers(cameras) {
             fillColor: markerColor,
             fillOpacity: 0.25,
             opacity: 0.4,
+            interactive: false,
+            bubblingMouseEvents: false,
         }).addTo(map);
 
         if (intensity > 0.7) {
@@ -450,7 +851,11 @@ function renderTrafficMarkers(cameras) {
                 iconSize: [0, 0]
             });
 
-            const pulseMarker = L.marker([lat, lng], { icon: pulseIcon }).addTo(map);
+            const pulseMarker = L.marker([lat, lng], {
+                icon: pulseIcon,
+                interactive: false,
+                keyboard: false,
+            }).addTo(map);
             pulseMarkers.push({
                 marker: pulseMarker,
                 circleRadius: circleRadius,
@@ -462,25 +867,177 @@ function renderTrafficMarkers(cameras) {
         const chartCanvasId = `vehiclePie-${camera.camera_id}-${Math.random().toString(36).slice(2, 8)}`;
         const popupHtml = cameraPopupHtml(camera, chartCanvasId);
 
-        circle.bindPopup(popupHtml, { maxWidth: 360 });
+        const hitMarker = L.circleMarker([lat, lng], {
+            radius: CAMERA_HIT_RADIUS_PX,
+            color: markerColor,
+            fillColor: markerColor,
+            opacity: 0.001,
+            fillOpacity: 0.001,
+            weight: 1,
+        }).addTo(map);
+        hitMarker.bringToFront();
+
+        hitMarker.bindPopup(popupHtml, {
+            maxWidth: 300,
+            keepInView: true,
+            autoPan: true,
+            autoPanPaddingTopLeft: [24, 24],
+            autoPanPaddingBottomRight: [24, 24],
+        });
 
         const onPopupOpen = () => {
+            activeCameraJumpId = String(camera.camera_id ?? '');
             setTimeout(() => renderVehiclePieChart(chartCanvasId, camera), 0);
         };
         const onPopupClose = () => {
             destroyPopupChart(chartCanvasId);
         };
 
-        circle.on('popupopen', onPopupOpen);
-        circle.on('popupclose', onPopupClose);
+        hitMarker.on('popupopen', onPopupOpen);
+        hitMarker.on('popupclose', onPopupClose);
+        hitMarker.on('click', () => {
+            activeCameraJumpId = String(camera.camera_id ?? '');
+        });
 
         trafficMarkers.push(circle);
+        trafficMarkers.push(hitMarker);
+        cameraJumpPoints.push({
+            cameraId: String(camera.camera_id ?? ''),
+            lat,
+            lng,
+            marker: hitMarker,
+        });
         bounds.push([lat, lng]);
     });
 
     if (bounds.length > 0) {
         map.fitBounds(bounds, { padding: [30, 30], maxZoom: 13 });
     }
+}
+
+function isTypingTarget(target) {
+    if (!target) return false;
+    const tag = String(target.tagName || '').toUpperCase();
+    return (
+        target.isContentEditable
+        || tag === 'INPUT'
+        || tag === 'TEXTAREA'
+        || tag === 'SELECT'
+    );
+}
+
+function isMapVisibleForKeyboardNavigation() {
+    if (!map || typeof map.getContainer !== 'function') return false;
+    const container = map.getContainer();
+    if (!container) return false;
+
+    const rect = container.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const visibleTop = Math.max(0, rect.top);
+    const visibleBottom = Math.min(viewportHeight, rect.bottom);
+    const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+    const minVisibleHeight = Math.min(rect.height * 0.35, 160);
+
+    return visibleHeight >= minVisibleHeight;
+}
+
+function getCurrentJumpPoint() {
+    if (!map || cameraJumpPoints.length === 0) return null;
+    if (activeCameraJumpId) {
+        const active = cameraJumpPoints.find((point) => point.cameraId === activeCameraJumpId);
+        if (active) return active;
+    }
+
+    const center = map.getCenter();
+    let bestPoint = cameraJumpPoints[0];
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    cameraJumpPoints.forEach((point) => {
+        const distance = map.distance(center, L.latLng(point.lat, point.lng));
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestPoint = point;
+        }
+    });
+
+    activeCameraJumpId = bestPoint.cameraId;
+    return bestPoint;
+}
+
+function findDirectionalJumpPoint(currentPoint, directionKey) {
+    if (!currentPoint || cameraJumpPoints.length <= 1) return null;
+
+    const vectors = {
+        ArrowUp: { x: 0, y: 1 },
+        ArrowDown: { x: 0, y: -1 },
+        ArrowLeft: { x: -1, y: 0 },
+        ArrowRight: { x: 1, y: 0 },
+    };
+    const dir = vectors[directionKey];
+    if (!dir) return null;
+
+    const cosLat = Math.max(0.2, Math.cos((currentPoint.lat * Math.PI) / 180));
+    let best = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    cameraJumpPoints.forEach((point) => {
+        if (point.cameraId === currentPoint.cameraId) return;
+
+        const dx = (point.lng - currentPoint.lng) * cosLat;
+        const dy = point.lat - currentPoint.lat;
+        const projected = (dx * dir.x) + (dy * dir.y);
+        if (projected <= 0) return;
+
+        const lateral = Math.abs((dx * dir.y) - (dy * dir.x));
+        const distance = Math.hypot(dx, dy);
+        const score = distance + (lateral * 2.2);
+
+        if (score < bestScore) {
+            bestScore = score;
+            best = point;
+        }
+    });
+
+    if (best) return best;
+
+    // Fallback if no point exists in the requested direction.
+    return cameraJumpPoints
+        .filter((point) => point.cameraId !== currentPoint.cameraId)
+        .sort((a, b) => {
+            const da = Math.hypot((a.lng - currentPoint.lng) * cosLat, a.lat - currentPoint.lat);
+            const db = Math.hypot((b.lng - currentPoint.lng) * cosLat, b.lat - currentPoint.lat);
+            return da - db;
+        })[0] || null;
+}
+
+function focusJumpPoint(point) {
+    if (!map || !point || !point.marker) return;
+    activeCameraJumpId = point.cameraId;
+    map.panTo([point.lat, point.lng], { animate: true, duration: 0.35 });
+    point.marker.openPopup();
+}
+
+function handleMapArrowNavigation(event) {
+    if (!map) return;
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    if (isTypingTarget(event.target)) return;
+    if (!isMapVisibleForKeyboardNavigation()) return;
+    if (cameraJumpPoints.length === 0) return;
+
+    const currentPoint = getCurrentJumpPoint();
+    if (!currentPoint) return;
+
+    const nextPoint = findDirectionalJumpPoint(currentPoint, event.key);
+    if (!nextPoint) return;
+
+    event.preventDefault();
+    focusJumpPoint(nextPoint);
+}
+
+function bindMapArrowNavigation() {
+    if (mapArrowNavigationBound) return;
+    mapArrowNavigationBound = true;
+    document.addEventListener('keydown', handleMapArrowNavigation);
 }
 
 async function fetchTrafficMapData(date = null) {
@@ -501,23 +1058,164 @@ async function fetchTrafficMapData(date = null) {
     return data;
 }
 
+function renderCurrentHeatmap() {
+    if (!latestTrafficPayload) return;
+
+    const rawCameras = Array.isArray(latestTrafficPayload.cameras) ? latestTrafficPayload.cameras : [];
+    const dateKey = latestTrafficPayload.selected_date || selectedTrafficDate || 'no-date';
+
+    const weightedCameras = heatmapMode === 'emissions'
+        ? computeEmissionsWeights(rawCameras, {
+            pollutant: selectedPollutant,
+            metric: selectedEmissionMetric,
+            k: HEATMAP_CONGESTION_K,
+            EF: HEATMAP_POLLUTANTS,
+            dateKey,
+        })
+        : computeTrafficWeights(rawCameras);
+
+    const normalized = normalizeHeatmapWeights(weightedCameras);
+    renderHeatmapMarkers(normalized);
+
+    const summary = buildHeatmapSummary(normalized);
+    updateTrafficSummary(summary);
+
+    const selectedDateText = latestTrafficPayload.selected_date || 'n/a';
+    if (heatmapMode === 'emissions') {
+        const metricText = selectedEmissionMetric === 'intensity' ? 'per-vehicle intensity' : 'total emissions';
+        setTrafficMapStatus(
+            `Showing ${formatCount(summary.camera_count)} cameras for ${selectedDateText} (${selectedPollutant} ${metricText})`
+        );
+    } else {
+        setTrafficMapStatus(`Showing ${formatCount(summary.camera_count)} cameras for ${selectedDateText} (traffic)`);
+    }
+}
+
+function updateDiffusionRadiusLabel() {
+    const row = document.getElementById('diffusionLegendRow');
+    const label = document.getElementById('diffusionRadiusValue');
+    if (row) {
+        row.classList.toggle('hidden', heatmapMode !== 'emissions');
+    }
+    if (!label) return;
+    label.textContent = `Diffusion radius: ${formatMeasure(currentDiffusionRadiusMeters(), 0)} m (fixed)`;
+}
+
+function syncHeatmapControls() {
+    const trafficBtn = document.getElementById('btn-traffic');
+    const emissionsBtn = document.getElementById('btn-emissions');
+    const emissionsControls = document.getElementById('emissionsControls');
+    const metricTotalBtn = document.getElementById('btn-metric-total');
+    const metricIntensityBtn = document.getElementById('btn-metric-intensity');
+    const methodPanel = document.getElementById('methodPanel');
+
+    if (trafficBtn) {
+        trafficBtn.classList.toggle('opacity-50', heatmapMode !== 'traffic');
+    }
+    if (emissionsBtn) {
+        emissionsBtn.classList.toggle('opacity-50', heatmapMode !== 'emissions');
+    }
+
+    if (emissionsControls) {
+        emissionsControls.classList.toggle('hidden', heatmapMode !== 'emissions');
+    }
+
+    if (metricTotalBtn) {
+        metricTotalBtn.classList.toggle('opacity-50', selectedEmissionMetric !== 'total');
+    }
+    if (metricIntensityBtn) {
+        metricIntensityBtn.classList.toggle('opacity-50', selectedEmissionMetric !== 'intensity');
+    }
+
+    if (heatmapMode !== 'emissions' && methodPanel) {
+        methodPanel.classList.add('hidden');
+    }
+
+    updateHeatmapLegend();
+    updateDiffusionRadiusLabel();
+}
+
+function setEmissionMetric(metric) {
+    const normalizedMetric = metric === 'intensity' ? 'intensity' : 'total';
+    if (selectedEmissionMetric === normalizedMetric) return;
+    selectedEmissionMetric = normalizedMetric;
+    syncHeatmapControls();
+    if (heatmapMode === 'emissions') {
+        renderCurrentHeatmap();
+    }
+}
+
+function initHeatmapControls() {
+    const pollutantSelect = document.getElementById('pollutantSelect');
+    const methodPanelToggle = document.getElementById('methodPanelToggle');
+    const methodPanel = document.getElementById('methodPanel');
+
+    if (pollutantSelect) {
+        const pollutantKeys = Object.keys(HEATMAP_POLLUTANTS);
+        const options = pollutantKeys.length > 0 ? pollutantKeys : ['CO2'];
+
+        if (!options.includes(selectedPollutant)) {
+            selectedPollutant = options[0];
+        }
+
+        pollutantSelect.innerHTML = options
+            .map((key) => {
+                const meta = resolvePollutantConfig(key, HEATMAP_POLLUTANTS);
+                return `<option value="${key}">${meta.label}</option>`;
+            })
+            .join('');
+        pollutantSelect.value = selectedPollutant;
+
+        if (pollutantSelect.dataset.bound !== 'true') {
+            pollutantSelect.dataset.bound = 'true';
+            pollutantSelect.addEventListener('change', (event) => {
+                selectedPollutant = event.target.value;
+                if (heatmapMode === 'emissions') {
+                    renderCurrentHeatmap();
+                }
+            });
+        }
+    }
+
+    if (methodPanelToggle && methodPanel && methodPanelToggle.dataset.bound !== 'true') {
+        methodPanelToggle.dataset.bound = 'true';
+        methodPanelToggle.addEventListener('click', () => {
+            methodPanel.classList.toggle('hidden');
+        });
+    }
+
+    updateDiffusionRadiusLabel();
+
+    syncHeatmapControls();
+}
+
 async function loadTrafficMap(date = null) {
     try {
         setTrafficMapStatus('Loading traffic data...');
         const data = await fetchTrafficMapData(date);
-        const summary = data.summary || {};
         const cameras = Array.isArray(data.cameras) ? data.cameras : [];
+        const dateKey = data.selected_date || selectedTrafficDate || 'no-date';
+        const cacheKey = congestionCacheKey(dateKey, HEATMAP_CONGESTION_K);
 
+        emissionsCongestionCache.delete(cacheKey);
+        buildCongestionCacheForDate(dateKey, cameras, HEATMAP_CONGESTION_K);
+
+        latestTrafficPayload = data;
         updateTrafficDateControls(data.selected_date, data.available_dates || []);
-        updateTrafficSummary(summary);
-        renderTrafficMarkers(cameras);
-
-        const selectedDateText = data.selected_date || 'n/a';
-        setTrafficMapStatus(`Showing ${formatCount(summary.camera_count)} cameras for ${selectedDateText}`);
+        renderCurrentHeatmap();
     } catch (error) {
         console.error('Failed to load traffic map data', error);
+        latestTrafficPayload = null;
         updateTrafficDateControls(null, []);
-        updateTrafficSummary({ camera_count: 0, heavy_count: 0, total_unique_vehicles: 0 });
+        updateTrafficSummary({
+            camera_count: 0,
+            heavy_count: 0,
+            metricValue: 0,
+            metricIsFloat: false,
+            heavyLabel: 'Heavy Traffic Cameras',
+            metricLabel: 'Total Vehicles (Date)',
+            metricDescription: 'Aggregate count from all active cameras',
+        });
         clearTrafficMarkers();
         setTrafficMapStatus(`Unable to load traffic data: ${error.message}`, true);
     }
@@ -545,13 +1243,19 @@ function initMap() {
 
     map.fitBounds(chicagoBounds);
     map.on('zoom', updatePulseMarkers);
+    bindMapArrowNavigation();
+    initHeatmapControls();
     loadTrafficMap();
 }
 
 function toggleLayer(type) {
-    const btn = document.getElementById(`btn-${type}`);
-    if (btn) {
-        btn.classList.toggle('opacity-50');
+    const nextMode = type === 'emissions' ? 'emissions' : 'traffic';
+    if (heatmapMode !== nextMode) {
+        heatmapMode = nextMode;
+        syncHeatmapControls();
+        if (latestTrafficPayload) {
+            renderCurrentHeatmap();
+        }
     }
 }
 
