@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 import datetime
+import asyncio
 from typing import Dict, Any, List, Optional, Tuple
 
 import modal
@@ -38,6 +39,9 @@ CAMERAS_TABLE = os.getenv("SNOWFLAKE_CAMERAS_TABLE", "CAMERAS")
 CAMERA_INFO_TABLE = os.getenv("SNOWFLAKE_CAMERA_INFO_TABLE", "CAMERA_INFO")
 RAG_DOCUMENTS_TABLE = os.getenv("SNOWFLAKE_RAG_TABLE", "RAG_DOCUMENTS")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+BATCH_MAX_FILES = max(1, int(os.getenv("BATCH_MAX_FILES", "20")))
+BATCH_DEFAULT_PARALLEL = max(1, int(os.getenv("BATCH_DEFAULT_PARALLEL", "4")))
+BATCH_MAX_PARALLEL = max(1, int(os.getenv("BATCH_MAX_PARALLEL", "8")))
 
 
 
@@ -414,18 +418,59 @@ def _image_suffix(filename: Optional[str]) -> str:
     return ".jpg"
 
 
-async def _save_upload_file(file: Any, suffix: str) -> Tuple[str, str]:
-    file_id = str(uuid.uuid4())
-    save_path = os.path.join(VIDEO_DIR, f"{file_id}{suffix}")
+def _form_values(form: Any, key: str) -> List[str]:
+    values: List[str] = []
+    if hasattr(form, "getlist"):
+        for value in form.getlist(key):
+            if value is None or value == "":
+                continue
+            values.append(str(value))
+    if values:
+        return values
+    value = form.get(key)
+    if value is None or value == "":
+        return []
+    return [str(value)]
 
-    with open(save_path, "wb") as f:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            f.write(chunk)
+
+def _pick_index_value(values: List[str], index: int) -> Optional[str]:
+    if not values:
+        return None
+    if index < len(values):
+        return values[index]
+    return values[-1]
+
+
+async def _save_upload_files(files: List[Any], suffix: str) -> List[Dict[str, str]]:
+    saved: List[Dict[str, str]] = []
+    for file in files:
+        file_id = str(uuid.uuid4())
+        save_path = os.path.join(VIDEO_DIR, f"{file_id}{suffix}")
+        filename = str(getattr(file, "filename", "") or "")
+
+        with open(save_path, "wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+
+        saved.append(
+            {
+                "file_id": file_id,
+                "save_path": save_path,
+                "filename": filename,
+            }
+        )
 
     await vol.commit.aio()
+    return saved
+
+
+async def _save_upload_file(file: Any, suffix: str) -> Tuple[str, str]:
+    saved = await _save_upload_files([file], suffix)
+    file_id = saved[0]["file_id"]
+    save_path = saved[0]["save_path"]
     return file_id, save_path
 
 
@@ -504,13 +549,15 @@ class CounterService:
 
         # Only count traffic-related classes for your pollution proxy.
         self.vehicle_classes = {"car", "truck", "bus", "motorcycle"}
+        # COCO class IDs for vehicle classes: car, motorcycle, bus, truck.
+        self.vehicle_class_ids = [2, 3, 5, 7]
 
     @modal.enter()
     def load_model(self):
         self._load_model()
 
     @modal.method()
-    def count_video(self, video_path: str) -> Dict[str, Any]:
+    def count_video(self, video_path: str, speed_mode: str = "standard") -> Dict[str, Any]:
         """
         Runs YOLOv8 + ByteTrack on the video and returns:
           - unique counts per class (unique track IDs)
@@ -525,14 +572,33 @@ class CounterService:
 
         from collections import defaultdict, Counter
 
-        # Run tracking. Ultralytics supports ByteTrack via tracker="bytetrack.yaml". :contentReference[oaicite:2]{index=2}
+        requested_mode = str(speed_mode or "standard").strip().lower()
+        if requested_mode in {"fast", "faster"}:
+            # Faster mode prioritizes throughput for long videos.
+            mode = "fast"
+            track_conf = 0.30
+            track_iou = 0.45
+            track_imgsz = 416
+            track_vid_stride = 3
+        else:
+            mode = "standard"
+            track_conf = 0.25
+            track_iou = 0.5
+            track_imgsz = 512
+            track_vid_stride = 1
+
+        # Run tracking. Ultralytics supports ByteTrack via tracker="bytetrack.yaml".
         results = self.model.track(
             source=video_path,
             tracker="bytetrack.yaml",
             persist=True,
+            stream=True,
             verbose=False,
-            conf=0.25,
-            iou=0.5,
+            classes=self.vehicle_class_ids,
+            imgsz=track_imgsz,
+            vid_stride=track_vid_stride,
+            conf=track_conf,
+            iou=track_iou,
         )
 
         # Track-level aggregation
@@ -572,13 +638,14 @@ class CounterService:
         total_unique = sum(counts_by_class.values())
 
         return {
+            "speed_mode": mode,
             "counts_by_class": dict(counts_by_class),
             "total_unique_vehicles": int(total_unique),
             "peak_vehicles_in_frame": int(peak_vehicles),
         }
 
     @modal.method()
-    def count_image(self, image_path: str) -> Dict[str, Any]:
+    def count_image(self, image_path: str, speed_mode: str = "standard") -> Dict[str, Any]:
         """
         Runs YOLOv8 detection on a single image and returns:
           - detected counts per class
@@ -592,11 +659,25 @@ class CounterService:
 
         from collections import Counter
 
+        requested_mode = str(speed_mode or "standard").strip().lower()
+        if requested_mode in {"fast", "faster"}:
+            mode = "fast"
+            detect_conf = 0.30
+            detect_iou = 0.45
+            detect_imgsz = 416
+        else:
+            mode = "standard"
+            detect_conf = 0.25
+            detect_iou = 0.5
+            detect_imgsz = 512
+
         results = self.model.predict(
             source=image_path,
             verbose=False,
-            conf=0.25,
-            iou=0.5,
+            classes=self.vehicle_class_ids,
+            imgsz=detect_imgsz,
+            conf=detect_conf,
+            iou=detect_iou,
         )
 
         counts_by_class = Counter()
@@ -611,6 +692,7 @@ class CounterService:
 
         total_detected = sum(counts_by_class.values())
         return {
+            "speed_mode": mode,
             "counts_by_class": dict(counts_by_class),
             "total_unique_vehicles": int(total_detected),
             "peak_vehicles_in_frame": int(total_detected),
@@ -627,6 +709,7 @@ async def upload_and_count(request: Request) -> Dict[str, Any]:
         - lat: float (optional)
         - lng: float (optional)
         - timestamp: string (optional)
+        - speed_mode: "standard" | "fast" (optional, default "standard")
     Returns JSON counts + echoes metadata.
     """
     form = await request.form()
@@ -640,13 +723,14 @@ async def upload_and_count(request: Request) -> Dict[str, Any]:
     lng = form.get("lng")
     timestamp = form.get("timestamp")
     camera_id = _parse_int(form.get("camera_id"))
+    speed_mode = str(form.get("speed_mode") or form.get("speed") or "standard").strip().lower()
 
     # Save to volume so the GPU method can read it
     vid_id, save_path = await _save_upload_file(file, ".mp4")
 
     # Run GPU inference
     svc = CounterService()
-    out = await svc.count_video.remote.aio(save_path)
+    out = await svc.count_video.remote.aio(save_path, speed_mode=speed_mode)
 
     # Persist detector output into Snowflake CAMERA_INFO when possible.
     db_write_status = _persist_detector_output(out, camera_id, lat, lng)
@@ -664,6 +748,131 @@ async def upload_and_count(request: Request) -> Dict[str, Any]:
 
 @app.function(volumes={VIDEO_DIR: vol}, secrets=[snowflake_secret])
 @modal.fastapi_endpoint(method="POST")
+async def batch_upload_and_count(request: Request) -> Dict[str, Any]:
+    """
+    HTTP endpoint:
+      POST multipart/form-data with:
+        - files: one or more video files (repeat this key for multiple files)
+        - speed_mode: "standard" | "fast" (optional, default "standard")
+        - max_parallel: int (optional, default env or 4)
+        - camera_id / lat / lng / timestamp:
+          optional metadata; can be repeated to map by file index
+
+    Returns one result per video and aggregate totals.
+    """
+    form = await request.form()
+
+    files: List[Any] = []
+    if hasattr(form, "getlist"):
+        files = [f for f in form.getlist("files") if f is not None]
+    if not files:
+        single = form.get("file")
+        if single is not None:
+            files = [single]
+
+    if not files:
+        return {"error": "Missing 'files' (or 'file') in form-data."}
+    if len(files) > BATCH_MAX_FILES:
+        return {"error": f"Too many files. Max allowed per request is {BATCH_MAX_FILES}."}
+
+    invalid_count = sum(0 if hasattr(file, "read") else 1 for file in files)
+    if invalid_count:
+        return {"error": "Invalid file payload in form-data. Ensure all entries are files."}
+
+    requested_mode = str(form.get("speed_mode") or form.get("speed") or "standard").strip().lower()
+    speed_mode = "fast" if requested_mode in {"fast", "faster"} else "standard"
+
+    requested_parallel = _to_int(form.get("max_parallel"), default=BATCH_DEFAULT_PARALLEL)
+    max_parallel = max(1, min(requested_parallel, BATCH_MAX_PARALLEL))
+
+    camera_values = _form_values(form, "camera_id") or _form_values(form, "camera_ids")
+    lat_values = _form_values(form, "lat") or _form_values(form, "lats")
+    lng_values = _form_values(form, "lng") or _form_values(form, "lngs")
+    timestamp_values = _form_values(form, "timestamp") or _form_values(form, "timestamps")
+
+    # Save all files first, then commit once to reduce volume overhead.
+    saved_files = await _save_upload_files(files, ".mp4")
+
+    svc = CounterService()
+    semaphore = asyncio.Semaphore(max_parallel)
+
+    async def _run_single(save_path: str) -> Dict[str, Any]:
+        async with semaphore:
+            return await svc.count_video.remote.aio(save_path, speed_mode=speed_mode)
+
+    raw_outputs = await asyncio.gather(
+        *[_run_single(saved["save_path"]) for saved in saved_files],
+        return_exceptions=True,
+    )
+
+    aggregate_counts = {
+        "car": 0,
+        "bus": 0,
+        "truck": 0,
+        "motorcycle": 0,
+    }
+    aggregate_total = 0
+    aggregate_peak = 0
+    success_count = 0
+    results: List[Dict[str, Any]] = []
+
+    for idx, (saved, output) in enumerate(zip(saved_files, raw_outputs)):
+        camera_id = _parse_int(_pick_index_value(camera_values, idx))
+        lat = _pick_index_value(lat_values, idx)
+        lng = _pick_index_value(lng_values, idx)
+        timestamp = _pick_index_value(timestamp_values, idx)
+
+        item_result: Dict[str, Any] = {
+            "index": idx,
+            "video_id": saved["file_id"],
+            "filename": saved["filename"],
+            "camera_id": camera_id,
+            "lat": lat,
+            "lng": lng,
+            "timestamp": timestamp,
+        }
+
+        if isinstance(output, Exception):
+            item_result["error"] = str(output)
+            item_result["db_write_status"] = "skipped"
+            results.append(item_result)
+            continue
+
+        db_write_status = _persist_detector_output(output, camera_id, lat, lng)
+        counts = output.get("counts_by_class", {}) or {}
+
+        for vehicle_type in aggregate_counts:
+            aggregate_counts[vehicle_type] += int(counts.get(vehicle_type, 0))
+
+        total_unique = int(output.get("total_unique_vehicles", 0))
+        peak_vehicles = int(output.get("peak_vehicles_in_frame", 0))
+        aggregate_total += total_unique
+        aggregate_peak = max(aggregate_peak, peak_vehicles)
+        success_count += 1
+
+        item_result["db_write_status"] = db_write_status
+        item_result.update(output)
+        results.append(item_result)
+
+    error_count = len(results) - success_count
+    return {
+        "speed_mode": speed_mode,
+        "max_parallel": max_parallel,
+        "requested_file_count": len(files),
+        "processed_file_count": len(results),
+        "summary": {
+            "success_count": success_count,
+            "error_count": error_count,
+            "counts_by_class": aggregate_counts,
+            "total_unique_vehicles": aggregate_total,
+            "peak_vehicles_in_frame": aggregate_peak,
+        },
+        "results": results,
+    }
+
+
+@app.function(volumes={VIDEO_DIR: vol}, secrets=[snowflake_secret])
+@modal.fastapi_endpoint(method="POST")
 async def upload_image_and_count(request: Request) -> Dict[str, Any]:
     """
     HTTP endpoint:
@@ -673,6 +882,7 @@ async def upload_image_and_count(request: Request) -> Dict[str, Any]:
         - lng: float (optional)
         - timestamp: string (optional)
         - camera_id: int (optional)
+        - speed_mode: "standard" | "fast" (optional, default "standard")
     Returns JSON counts + echoes metadata.
     """
     form = await request.form()
@@ -686,6 +896,7 @@ async def upload_image_and_count(request: Request) -> Dict[str, Any]:
     lng = form.get("lng")
     timestamp = form.get("timestamp")
     camera_id = _parse_int(form.get("camera_id"))
+    speed_mode = str(form.get("speed_mode") or form.get("speed") or "standard").strip().lower()
     suffix = _image_suffix(getattr(file, "filename", ""))
 
     # Save to volume so the GPU method can read it
@@ -693,7 +904,7 @@ async def upload_image_and_count(request: Request) -> Dict[str, Any]:
 
     # Run GPU inference
     svc = CounterService()
-    out = await svc.count_image.remote.aio(save_path)
+    out = await svc.count_image.remote.aio(save_path, speed_mode=speed_mode)
 
     # Persist detector output into Snowflake CAMERA_INFO when possible.
     db_write_status = _persist_detector_output(out, camera_id, lat, lng)

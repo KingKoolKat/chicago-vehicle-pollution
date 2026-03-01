@@ -71,6 +71,8 @@ If omitted, frontend defaults to `"/chat"`.
   video tracking mode (counts unique vehicles by track ID)
 - `POST /upload_image_and_count`:
   still-image detection mode (counts detected vehicles in one frame)
+- `POST /batch_upload_and_count`:
+  batch video mode (processes multiple videos concurrently)
 
 Example `curl` for still image:
 
@@ -79,7 +81,8 @@ curl -X POST "https://<your-modal-endpoint>/upload_image_and_count" \
   -F "file=@/absolute/path/to/image.jpg" \
   -F "lat=41.8781" \
   -F "lng=-87.6298" \
-  -F "camera_id=1"
+  -F "camera_id=1" \
+  -F "speed_mode=fast"
 ```
 
 Example `curl` for video:
@@ -89,5 +92,20 @@ curl -X POST "https://<your-modal-endpoint>/upload_and_count" \
   -F "file=@/absolute/path/to/video.mp4" \
   -F "lat=41.8781" \
   -F "lng=-87.6298" \
-  -F "camera_id=1"
+  -F "camera_id=1" \
+  -F "speed_mode=fast"
+```
+
+Example `curl` for batch videos:
+
+```bash
+curl -X POST "https://<your-modal-endpoint>/batch_upload_and_count" \
+  -F "files=@/absolute/path/to/video1.mp4" \
+  -F "files=@/absolute/path/to/video2.mp4" \
+  -F "files=@/absolute/path/to/video3.mp4" \
+  -F "camera_id=1" \
+  -F "camera_id=2" \
+  -F "camera_id=3" \
+  -F "speed_mode=fast" \
+  -F "max_parallel=4"
 ```
