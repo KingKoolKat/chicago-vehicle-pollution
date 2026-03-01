@@ -1,5 +1,6 @@
 document.body.insertAdjacentHTML('afterbegin', createNavigation());
 const CHAT_API_URL = window.CHAT_API_URL || '/chat';
+const CHAT_TOP_K = Number(window.CHAT_TOP_K || 25);
 const CHAT_TEST_MODE = window.CHAT_TEST_MODE === true;
 const TRAFFIC_MAP_API_URL = window.TRAFFIC_MAP_API_URL || '/traffic_map';
 const LANGUAGE_KEY = 'ecotrack_language';
@@ -1666,16 +1667,6 @@ async function sendMessage() {
         const response = await fetchRagResponse(message);
         removeTyping();
         addMessage(response.answer || "I don't have enough context to answer that.", 'bot');
-        if (typeof response.retrieved_chunks !== 'undefined') {
-            addMessage(`Retrieved chunks: ${response.retrieved_chunks}`, 'bot');
-        }
-
-        if (response.citations && response.citations.length > 0) {
-            const refs = response.citations
-                .slice(0, 3)
-                .map((c) => c.source_url || `${c.doc_id || 'doc'}:${c.chunk_id || 'chunk'}`);
-            addMessage(`Sources: ${refs.join(' | ')}`, 'bot');
-        }
     } catch (err) {
         removeTyping();
         if (CHAT_TEST_MODE) {
@@ -1692,6 +1683,17 @@ function quickAsk(question) {
     sendMessage();
 }
 
+function normalizeChatText(text) {
+    if (text === null || typeof text === "undefined") return "";
+    let value = String(text).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+    }
+    return value
+        .replace(/\\n/g, "\n")
+        .replace(/\\"/g, '"');
+}
+
 function addMessage(text, sender) {
     const container = document.getElementById('chatContainer');
     const div = document.createElement('div');
@@ -1700,10 +1702,10 @@ function addMessage(text, sender) {
     const avatar = sender === 'user' 
         ? '<div class="w-8 h-8 rounded-full bg-gray-600 flex-shrink-0 flex items-center justify-center"><i class="fas fa-user text-white text-xs"></i></div>'
         : '<div class="w-8 h-8 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 flex-shrink-0 flex items-center justify-center"><i class="fas fa-robot text-white text-xs"></i></div>';
-    
+    const displayText = normalizeChatText(text).replace(/\n/g, "<br>");
     const bubble = sender === 'user'
-        ? '<div class="glass-panel rounded-2xl rounded-tr-none px-4 py-3 max-w-[80%] bg-blue-600/20 border-blue-500/30">' + text + '</div>'
-        : '<div class="glass-panel rounded-2xl rounded-tl-none px-4 py-3 max-w-[80%]">' + text + '</div>';
+        ? '<div class="glass-panel rounded-2xl rounded-tr-none px-4 py-3 max-w-[80%] bg-blue-600/20 border-blue-500/30">' + displayText + '</div>'
+        : '<div class="glass-panel rounded-2xl rounded-tl-none px-4 py-3 max-w-[80%]">' + displayText + '</div>';
     
     div.innerHTML = avatar + bubble;
     container.appendChild(div);

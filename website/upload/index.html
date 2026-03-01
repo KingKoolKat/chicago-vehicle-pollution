@@ -177,8 +177,7 @@
     <script src="../js/components.js"></script>
     <script src="../js/main.js"></script>
     <script>
-        const RESIDENT_REPORT_API_URL = window.RESIDENT_REPORT_API_URL || "/submit_resident_report";
-        const ADMIN_VIDEO_API_URL = window.ADMIN_VIDEO_API_URL || "/admin_process_video";
+        const REPORT_OPS_API_URL = window.REPORT_OPS_API_URL || "/report_ops";
         const UPLOAD_TRAFFIC_MAP_API_URL = window.TRAFFIC_MAP_API_URL || "/traffic_map";
 
         let residentSelectedFile = null;
@@ -291,7 +290,8 @@
                 setStatus("residentStatus", "Submitting report and processing image...", false);
 
                 try {
-                    const res = await fetch(RESIDENT_REPORT_API_URL, {
+                    formData.append("action", "submit_resident_report");
+                    const res = await fetch(REPORT_OPS_API_URL, {
                         method: "POST",
                         body: formData
                     });
@@ -439,7 +439,8 @@
                 setStatus("adminStatus", "Processing video and writing dataset rows...", false);
 
                 try {
-                    const res = await fetch(ADMIN_VIDEO_API_URL, {
+                    formData.append("action", "admin_process_video");
+                    const res = await fetch(REPORT_OPS_API_URL, {
                         method: "POST",
                         body: formData
                     });

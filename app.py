@@ -47,12 +47,13 @@ AUTH_SESSION_TTL_SECONDS = 60 * 60 * 24 * 14
 AUTH_USERS_TABLE = os.getenv("SNOWFLAKE_USERS_TABLE", "MY_MODAL_DB.PUBLIC.USERS")
 AUTH_GOOGLE_PASSWORD_SENTINEL = "google_oauth"
 _auth_lock = threading.Lock()
-DEFAULT_SEARCH_LIMIT = int(os.getenv("SNOWFLAKE_RAG_TOP_K", "5"))
-DEFAULT_CHAT_MODEL = os.getenv("SNOWFLAKE_CHAT_MODEL", "mistral-large2")
-DEFAULT_SEARCH_COLUMNS = ["content", "source_url", "doc_id", "chunk_id"]
+DEFAULT_SEARCH_LIMIT = int(os.getenv("SNOWFLAKE_RAG_TOP_K", "25"))
+DEFAULT_CHAT_MODEL = os.getenv("SNOWFLAKE_CHAT_MODEL", "openai-gpt-5")
+DEFAULT_SEARCH_COLUMNS = ["chunk_text", "doc_id", "file_name", "category", "chunk_id", "doc_content"]
 CAMERAS_TABLE = os.getenv("SNOWFLAKE_CAMERAS_TABLE", "CAMERAS")
 CAMERA_INFO_TABLE = os.getenv("SNOWFLAKE_CAMERA_INFO_TABLE", "CAMERA_INFO")
 RAG_DOCUMENTS_TABLE = os.getenv("SNOWFLAKE_RAG_TABLE", "RAG_DOCUMENTS")
+RAG_CHUNKS_TABLE = os.getenv("SNOWFLAKE_RAG_CHUNKS_TABLE", "RAG_DOCUMENT_CHUNKS")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 BATCH_MAX_FILES = max(1, int(os.getenv("BATCH_MAX_FILES", "20")))
 BATCH_DEFAULT_PARALLEL = max(1, int(os.getenv("BATCH_DEFAULT_PARALLEL", "4")))
@@ -111,17 +112,105 @@ def _query_rows(conn, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
     return [dict(zip(cols, row)) for row in rows]
 
 
-def _format_rows(title: str, rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    if not rows:
-        return None
+def _rows_to_contexts(title: str, rows: List[Dict[str, Any]], max_rows: int = 25) -> List[Dict[str, Any]]:
+    contexts: List[Dict[str, Any]] = []
+    for idx, row in enumerate(rows[:max_rows], start=1):
+        pairs = [f"{k}={v}" for k, v in row.items() if v is not None and str(v) != ""]
+        if not pairs:
+            continue
+        contexts.append(
+            {
+                "content": f"{title} row {idx}: " + ", ".join(pairs),
+                "source_url": f"SNOWFLAKE:{title}",
+            }
+        )
+    return contexts
 
-    lines = [title]
-    for row in rows:
-        pairs = [f"{k}={v}" for k, v in row.items() if v is not None]
-        if pairs:
-            lines.append(f"- {', '.join(pairs)}")
 
-    return {"content": "\n".join(lines), "source_url": f"SNOWFLAKE:{title}"}
+def _question_keywords(question: str, max_terms: int = 8) -> List[str]:
+    stopwords = {
+        "the", "and", "for", "with", "that", "this", "from", "into", "about",
+        "what", "when", "where", "which", "how", "are", "is", "was", "were",
+        "give", "some", "towards", "than", "then", "your", "you", "our",
+        "have", "has", "had", "can", "could", "would", "should", "please",
+    }
+    clean = "".join(ch if (ch.isalnum() or ch.isspace()) else " " for ch in str(question or "").lower())
+    terms: List[str] = []
+    for token in clean.split():
+        if len(token) < 3 or token in stopwords:
+            continue
+        if token not in terms:
+            terms.append(token)
+        if len(terms) >= max_terms:
+            break
+    return terms
+
+
+def _topic_categories(question: str) -> List[str]:
+    q = str(question or "").lower()
+    categories: List[str] = []
+    if any(t in q for t in ["recommend", "reduce", "mitigate", "solution", "policy"]):
+        categories.extend(["recommend", "mitigation", "strategy", "policy", "best practice"])
+    if any(t in q for t in ["truck", "diesel", "heavy"]):
+        categories.extend(["truck", "diesel", "heavy-duty", "freight"])
+    if any(t in q for t in ["health", "asthma", "pm2", "no2", "exposure"]):
+        categories.extend(["health", "pm2.5", "no2", "exposure"])
+    if any(t in q for t in ["emission", "pollution", "air quality"]):
+        categories.extend(["emission", "pollution", "air quality"])
+    return categories
+
+
+def _get_rag_context_from_chunks(conn, question: str, limit: int) -> List[Dict[str, Any]]:
+    del question
+    rows = _query_rows(
+        conn,
+        f"""
+        SELECT
+          chunk_id,
+          doc_id,
+          category,
+          file_name,
+          chunk_text
+        FROM {RAG_CHUNKS_TABLE}
+        LIMIT %s
+        """,
+        (max(1, min(limit, 100)),),
+    )
+    return _rows_to_contexts("RAG_CHUNKS", rows, max_rows=limit)
+
+
+def _get_rag_context_keyword_fallback(conn, question: str, limit: int) -> List[Dict[str, Any]]:
+    keywords = _question_keywords(question)
+    categories = _topic_categories(question)
+    filters: List[str] = []
+    params: List[Any] = []
+
+    for term in categories:
+        filters.append("LOWER(category) LIKE %s")
+        params.append(f"%{term.lower()}%")
+
+    for term in keywords:
+        filters.append("LOWER(doc_content) LIKE %s")
+        params.append(f"%{term.lower()}%")
+
+    where_clause = " OR ".join(filters) if filters else "1=1"
+    params.append(max(1, min(limit, 100)))
+
+    rows = _query_rows(
+        conn,
+        f"""
+        SELECT
+          doc_id,
+          category,
+          file_name,
+          doc_content
+        FROM {RAG_DOCUMENTS_TABLE}
+        WHERE {where_clause}
+        LIMIT %s
+        """,
+        tuple(params),
+    )
+    return _rows_to_contexts("RAG_DOCUMENTS", rows, max_rows=limit)
 
 
 def _get_structured_context(conn, question: str) -> List[Dict[str, Any]]:
@@ -149,9 +238,7 @@ def _get_structured_context(conn, question: str) -> List[Dict[str, Any]]:
         LIMIT 15
         """,
     )
-    recent_context = _format_rows("RECENT_CAMERA_INFO", recent_rows)
-    if recent_context:
-        contexts.append(recent_context)
+    contexts.extend(_rows_to_contexts("RECENT_CAMERA_INFO", recent_rows, max_rows=20))
 
     hotspot_rows = _query_rows(
         conn,
@@ -177,25 +264,7 @@ def _get_structured_context(conn, question: str) -> List[Dict[str, Any]]:
         LIMIT 5
         """,
     )
-    hotspot_context = _format_rows("POLLUTION_HOTSPOTS", hotspot_rows)
-    if hotspot_context:
-        contexts.append(hotspot_context)
-
-    rag_rows = _query_rows(
-        conn,
-        f"""
-        SELECT
-          doc_id,
-          category,
-          doc_content
-        FROM {RAG_DOCUMENTS_TABLE}
-        ORDER BY doc_id DESC
-        LIMIT 15
-        """,
-    )
-    rag_context = _format_rows("RAG_DOCUMENTS", rag_rows)
-    if rag_context:
-        contexts.append(rag_context)
+    contexts.extend(_rows_to_contexts("POLLUTION_HOTSPOTS", hotspot_rows, max_rows=10))
 
     return contexts
 
@@ -759,24 +828,45 @@ async def _save_upload_file(file: Any, suffix: str) -> Tuple[str, str]:
 def _complete_with_context(conn, question: str, contexts: List[Dict[str, Any]]) -> str:
     context_lines = []
     for i, item in enumerate(contexts, start=1):
-        content = str(item.get("content", "")).strip()
+        content = str(
+            item.get("content")
+            or item.get("chunk_text")
+            or item.get("doc_content")
+            or item.get("CHUNK_TEXT")
+            or item.get("DOC_CONTENT")
+            or ""
+        ).strip()
         if not content:
             # Allow structured rows that may not contain a plain "content" field.
             content = ", ".join(
                 f"{k}={v}" for k, v in item.items() if k not in {"source_url"} and v is not None
             ).strip()
-        source_url = str(item.get("source_url", "")).strip()
+        source_url = str(item.get("source_url", "") or item.get("SOURCE_URL", "")).strip()
+        file_name = str(item.get("file_name", "") or item.get("FILE_NAME", "")).strip()
+        category = str(item.get("category", "") or item.get("CATEGORY", "")).strip()
         if not content:
             continue
-        label = source_url or f"doc-{item.get('doc_id', i)}:chunk-{item.get('chunk_id', i)}"
+        label = (
+            source_url
+            or file_name
+            or f"doc-{item.get('doc_id', item.get('DOC_ID', i))}:chunk-{item.get('chunk_id', item.get('CHUNK_ID', i))}"
+        )
+        if category:
+            label = f"{label} (category={category})"
         context_lines.append(f"[{i}] {content}\nSOURCE: {label}")
 
     joined_context = "\n\n".join(context_lines) if context_lines else "No context found."
 
     prompt = (
         "You are an environmental assistant for Chicago vehicle pollution analysis.\n"
-        "Use ONLY the context below. If the answer is not present in context, say you do not know.\n"
-        "Keep the answer concise and include source bracket ids such as [1], [2] when relevant.\n\n"
+        "Answer the user's question directly and in a detailed practical way.\n"
+        "Prioritize the provided context for facts and include source citations.\n"
+        "If context is partially relevant, provide best-effort recommendations and clearly state assumptions.\n"
+        "Only say you do not know when there is truly no relevant evidence in context.\n"
+        "Prefer concise sections: Summary, Recommendations, and Evidence.\n"
+        "At the end, include a final section titled 'Sources' with 3-8 main source names only "
+        "(organization/report names, no URLs, no bracket ranges, no raw chunk IDs). "
+        "Examples: EPA, American Lung Association, Illinois EPA, City of Chicago.\n\n"
         f"QUESTION:\n{question}\n\n"
         f"CONTEXT:\n{joined_context}"
     )
@@ -981,26 +1071,7 @@ class CounterService:
         }
 
 
-@app.function(volumes={VIDEO_DIR: vol}, secrets=[snowflake_secret])
-@modal.fastapi_endpoint(method="POST")
-async def upload_and_count(request: Request) -> Dict[str, Any]:
-    """
-    HTTP endpoint:
-      POST multipart/form-data with:
-        - file: video
-        - lat: float (optional)
-        - lng: float (optional)
-        - timestamp: string (optional)
-        - speed_mode: "standard" | "fast" (optional, default "standard")
-    Returns JSON counts + echoes metadata.
-    """
-    form = await request.form()
-    file = form.get("file")
-    if file is None:
-        return {"error": "Missing 'file' in form-data."}
-    if not hasattr(file, "read"):
-        return {"error": "Invalid 'file' in form-data."}
-
+async def _upload_video_and_count_from_form(form: Any, file: Any) -> Dict[str, Any]:
     lat = form.get("lat")
     lng = form.get("lng")
     timestamp = form.get("timestamp")
@@ -1153,27 +1224,7 @@ async def batch_upload_and_count(request: Request) -> Dict[str, Any]:
     }
 
 
-@app.function(volumes={VIDEO_DIR: vol}, secrets=[snowflake_secret])
-@modal.fastapi_endpoint(method="POST")
-async def upload_image_and_count(request: Request) -> Dict[str, Any]:
-    """
-    HTTP endpoint:
-      POST multipart/form-data with:
-        - file: image
-        - lat: float (optional)
-        - lng: float (optional)
-        - timestamp: string (optional)
-        - camera_id: int (optional)
-        - speed_mode: "standard" | "fast" (optional, default "standard")
-    Returns JSON counts + echoes metadata.
-    """
-    form = await request.form()
-    file = form.get("file")
-    if file is None:
-        return {"error": "Missing 'file' in form-data."}
-    if not hasattr(file, "read"):
-        return {"error": "Invalid 'file' in form-data."}
-
+async def _upload_image_and_count_from_form(form: Any, file: Any) -> Dict[str, Any]:
     lat = form.get("lat")
     lng = form.get("lng")
     timestamp = form.get("timestamp")
@@ -1200,6 +1251,35 @@ async def upload_image_and_count(request: Request) -> Dict[str, Any]:
         "db_write_status": db_write_status,
         **out,
     }
+
+
+@app.function(volumes={VIDEO_DIR: vol}, secrets=[snowflake_secret])
+@modal.fastapi_endpoint(method="POST")
+async def upload_media_and_count(request: Request) -> Dict[str, Any]:
+    """
+    Consolidated HTTP endpoint for media uploads.
+      POST multipart/form-data with:
+        - file: image or video
+        - media_type: "image" | "video" (optional; inferred from filename when omitted)
+        - lat/lng/timestamp/camera_id/speed_mode: optional
+    """
+    form = await request.form()
+    file = form.get("file")
+    if file is None:
+        return {"error": "Missing 'file' in form-data."}
+    if not hasattr(file, "read"):
+        return {"error": "Invalid 'file' in form-data."}
+
+    requested_media_type = str(form.get("media_type") or "").strip().lower()
+    filename = str(getattr(file, "filename", "") or "")
+    ext = os.path.splitext(filename)[1].lower()
+
+    if requested_media_type not in {"image", "video"}:
+        requested_media_type = "image" if ext in IMAGE_EXTENSIONS else "video"
+
+    if requested_media_type == "image":
+        return await _upload_image_and_count_from_form(form, file)
+    return await _upload_video_and_count_from_form(form, file)
 
 
 @app.function(secrets=[snowflake_secret])
@@ -1252,7 +1332,12 @@ async def traffic_map(request: Request) -> Dict[str, Any]:
             conn.close()
 
 
-@app.function(secrets=[snowflake_secret])
+@app.function(
+    secrets=[snowflake_secret],
+    min_containers=4,
+    max_containers=10,
+    scaledown_window=300,
+)
 @modal.fastapi_endpoint(method="POST")
 async def chat(request: Request) -> Dict[str, Any]:
     """
@@ -1274,7 +1359,7 @@ async def chat(request: Request) -> Dict[str, Any]:
     except (TypeError, ValueError):
         top_k = DEFAULT_SEARCH_LIMIT
 
-    top_k = max(1, min(top_k, 20))
+    top_k = max(5, min(top_k, 50))
 
     conn = None
     try:
@@ -1289,7 +1374,36 @@ async def chat(request: Request) -> Dict[str, Any]:
             except Exception:
                 pass
 
+        # Try chunk table first (if available) to improve semantic recall on long documents.
+        try:
+            contexts.extend(_get_rag_context_from_chunks(conn, question, top_k))
+        except Exception:
+            pass
+
+        # Fallback keyword/category retrieval from raw RAG docs for non-semantic matches.
+        try:
+            contexts.extend(_get_rag_context_keyword_fallback(conn, question, max(10, top_k)))
+        except Exception:
+            pass
+
         contexts.extend(_get_structured_context(conn, question))
+
+        # Deduplicate and cap context size to keep prompts within practical limits.
+        deduped: List[Dict[str, Any]] = []
+        seen = set()
+        for item in contexts:
+            key = (
+                str(item.get("content") or item.get("chunk_text") or item.get("doc_content") or ""),
+                str(item.get("source_url") or item.get("file_name") or ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+            if len(deduped) >= 120:
+                break
+        contexts = deduped
+
         answer = _complete_with_context(conn, question, contexts)
 
         citations = [
@@ -1298,6 +1412,8 @@ async def chat(request: Request) -> Dict[str, Any]:
                 "source_url": item.get("source_url"),
                 "doc_id": item.get("doc_id"),
                 "chunk_id": item.get("chunk_id"),
+                "file_name": item.get("file_name"),
+                "category": item.get("category"),
             }
             for idx, item in enumerate(contexts)
         ]
@@ -1526,20 +1642,7 @@ async def auth(request: Request) -> Dict[str, Any]:
             conn.close()
 
 
-@app.function(volumes={VIDEO_DIR: vol, AUTH_DIR: auth_vol}, secrets=[snowflake_secret])
-@modal.fastapi_endpoint(method="POST")
-async def submit_resident_report(request: Request) -> Dict[str, Any]:
-    """
-    HTTP endpoint:
-      POST multipart/form-data with:
-        - token: auth session token
-        - file: image
-        - notes: optional text
-        - lat/lng: optional
-        - timestamp: optional
-    Runs image model, stores report metadata + stats in server file.
-    """
-    form = await request.form()
+async def _submit_resident_report_from_form(form: Any) -> Dict[str, Any]:
     token = str(form.get("token") or "").strip()
     notes = str(form.get("notes") or "").strip()
     lat = form.get("lat")
@@ -1606,20 +1709,7 @@ async def submit_resident_report(request: Request) -> Dict[str, Any]:
     return {"ok": True, "report": report}
 
 
-@app.function(volumes={VIDEO_DIR: vol, AUTH_DIR: auth_vol}, secrets=[snowflake_secret])
-@modal.fastapi_endpoint(method="POST")
-async def admin_process_video(request: Request) -> Dict[str, Any]:
-    """
-    HTTP endpoint:
-      POST multipart/form-data with:
-        - token: auth session token (admin)
-        - file: video
-        - camera_id: int
-        - start_time/end_time: optional ISO timestamps
-        - lat/lng: optional
-    Runs video model and writes counts into dataset.
-    """
-    form = await request.form()
+async def _admin_process_video_from_form(form: Any) -> Dict[str, Any]:
     token = str(form.get("token") or "").strip()
     file = form.get("file")
     camera_id = _parse_int(form.get("camera_id"))
@@ -1695,18 +1785,29 @@ async def admin_process_video(request: Request) -> Dict[str, Any]:
     return {"ok": True, "job": job, **out}
 
 
+@app.function(volumes={VIDEO_DIR: vol, AUTH_DIR: auth_vol}, secrets=[snowflake_secret])
+@modal.fastapi_endpoint(method="POST")
+async def report_ops(request: Request) -> Dict[str, Any]:
+    """
+    Consolidated report/video operations endpoint.
+      POST multipart/form-data with:
+        - action: "submit_resident_report" | "admin_process_video"
+        - remaining fields are the same as the legacy endpoints.
+    """
+    form = await request.form()
+    action = str(form.get("action") or "").strip().lower()
+
+    if action == "submit_resident_report":
+        return await _submit_resident_report_from_form(form)
+    if action == "admin_process_video":
+        return await _admin_process_video_from_form(form)
+
+    return {
+        "ok": False,
+        "message": "Missing or invalid action. Use 'submit_resident_report' or 'admin_process_video'.",
+    }
+
+
 @app.local_entrypoint()
 def main():
     print("Deployed. Use: modal deploy app.py")
-
-@app.function(secrets=[snowflake_secret])
-def test_snowflake_query():
-    conn = _snowflake_connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT CURRENT_ACCOUNT(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_WAREHOUSE()
-            """)
-            print(cur.fetchone())
-    finally:
-        conn.close()
