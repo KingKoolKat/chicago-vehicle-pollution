@@ -283,6 +283,26 @@
                 .join("");
         }
 
+        function renderAdminCountsCompact(counts) {
+            const list = document.getElementById("adminClassCounts");
+            if (!list) return;
+
+            const normalized = counts || {};
+            const labels = [
+                ["car", "Cars"],
+                ["bus", "Buses"],
+                ["truck", "Trucks"],
+                ["motorcycle", "Motorcycles"]
+            ];
+            list.className = "mt-4 grid grid-cols-2 gap-2 text-xs";
+            list.innerHTML = labels
+                .map(([key, label]) => {
+                    const value = Number(normalized[key] || 0).toLocaleString();
+                    return `<li class="rounded-lg bg-white/70 border border-green-500/15 px-2.5 py-2"><span class="text-gray-500">${label}</span><div class="font-semibold text-sm">${value}</div></li>`;
+                })
+                .join("");
+        }
+
         function applyResidentStats(stats) {
             document.getElementById("residentTotalVehicles").textContent = Number(stats.total_unique_vehicles || 0).toLocaleString();
             document.getElementById("residentPeakVehicles").textContent = Number(stats.peak_vehicles_in_frame || 0).toLocaleString();
@@ -294,13 +314,22 @@
                 const summary = payload.summary || {};
                 document.getElementById("adminDbStatus").textContent = `${Number(summary.success_count || 0).toLocaleString()} success / ${Number(summary.error_count || 0).toLocaleString()} failed`;
                 document.getElementById("adminTotalVehicles").textContent = Number(summary.total_unique_vehicles || 0).toLocaleString();
-                renderClassCounts("adminClassCounts", summary.counts_by_class || {});
+                renderAdminCountsCompact(summary.counts_by_class || {});
                 return;
             }
 
-            document.getElementById("adminDbStatus").textContent = payload.db_write_status || "-";
+            const job = (payload && payload.job) || {};
+            const dbWriteStatus = payload.db_write_status || job.db_write_status || "-";
+            const recordedDate = payload.recorded_date || job.recorded_date || "";
+            const cameraId = payload.camera_id || job.camera_id || "";
+            const dbMeta = [];
+            if (cameraId !== "") dbMeta.push(`camera ${cameraId}`);
+            if (recordedDate) dbMeta.push(recordedDate);
+            const dbSuffix = dbMeta.length ? ` (${dbMeta.join(" | ")})` : "";
+
+            document.getElementById("adminDbStatus").textContent = `${dbWriteStatus}${dbSuffix}`;
             document.getElementById("adminTotalVehicles").textContent = Number(payload.total_unique_vehicles || 0).toLocaleString();
-            renderClassCounts("adminClassCounts", payload.counts_by_class || {});
+            renderAdminCountsCompact(payload.counts_by_class || {});
         }
 
         async function initResidentPanel() {
@@ -952,7 +981,13 @@
                             errorCount > 0
                         );
                     } else {
-                        setStatus("adminStatus", "Video processed successfully.", false);
+                        const dbWriteStatus = data.db_write_status || (data.job && data.job.db_write_status) || "-";
+                        const processedDate = data.recorded_date || (data.job && data.job.recorded_date) || recordedDate;
+                        setStatus(
+                            "adminStatus",
+                            `Video processed (${dbWriteStatus}). For map updates, check the selected date: ${processedDate}.`,
+                            String(dbWriteStatus).toLowerCase().startsWith("error")
+                        );
                     }
                 } catch (error) {
                     setStatus("adminStatus", `Processing failed: ${error.message}`, true);
