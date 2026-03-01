@@ -266,9 +266,9 @@ function observeVisibleSections() {
 function handleUploadClick() {
     const currentUser = window.Auth ? window.Auth.getSessionUser() : null;
     if (currentUser) {
-        window.location.href = 'upload/?section=upload';
+        window.location.href = 'upload';
     } else {
-        sessionStorage.setItem('redirectAfterLogin', 'upload/?section=upload');
+        sessionStorage.setItem('redirectAfterLogin', 'upload');
         window.location.href = 'login/';
     }
 }
