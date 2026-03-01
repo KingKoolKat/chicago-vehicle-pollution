@@ -388,13 +388,13 @@ function updateHeatmapLegend(scale = null) {
 
     if (lowScaleLabel) {
         lowScaleLabel.textContent = hasScale
-            ? `P5: ${formatHeatmapLegendValue(scale.p05)} ${unit}`
-            : `P5: -- ${unit}`;
+            ? `${formatHeatmapLegendValue(scale.p05)} ${unit}`
+            : `-- ${unit}`;
     }
     if (highScaleLabel) {
         highScaleLabel.textContent = hasScale
-            ? `P95: ${formatHeatmapLegendValue(scale.p95)} ${unit}`
-            : `P95: -- ${unit}`;
+            ? `${formatHeatmapLegendValue(scale.p95)} ${unit}`
+            : `-- ${unit}`;
     }
 
     if (gradientBar) {
