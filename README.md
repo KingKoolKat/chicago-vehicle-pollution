@@ -48,6 +48,7 @@ Optional:
 - `SNOWFLAKE_ROLE`
 - `SNOWFLAKE_CHAT_MODEL` (default: `snowflake-arctic`)
 - `SNOWFLAKE_RAG_TOP_K` (default: `5`)
+- `SNOWFLAKE_USERS_TABLE` (default: `MY_MODAL_DB.PUBLIC.USERS`, used by `/auth`)
 
 ## 3) Deploy backend
 
