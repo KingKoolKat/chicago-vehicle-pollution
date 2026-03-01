@@ -72,7 +72,7 @@ body {
 }
 
 .heatmap-legend {
-    background: linear-gradient(to right, #d9f2c8, #9bd671, #67bd36, #3a8e1b);
+    background: linear-gradient(to right, #00ff88, #ffff00, #ff8800, #ff0000);
     height: 20px;
     border-radius: 10px;
 }

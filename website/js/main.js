@@ -145,11 +145,6 @@ async function injectSectionsOnHomePage() {
 }
 
 async function scrollToSection(id, { behavior = 'smooth', persist = true } = {}) {
-    if (!isHomePage) {
-        window.location.href = `../?section=${encodeURIComponent(id)}`;
-        return;
-    }
-
     await sectionsReadyPromise;
     const target = await waitForElementById(id);
     if (target) {
@@ -162,6 +157,50 @@ async function scrollToSection(id, { behavior = 'smooth', persist = true } = {})
     }
 }
 
+function observeVisibleSections() {
+    if (!isHomePage) return;
+
+    if (sectionObserver) {
+        sectionObserver.disconnect();
+    }
+
+    const observed = TRACKED_SECTION_IDS
+        .map((id) => document.getElementById(id))
+        .filter(Boolean);
+
+    if (observed.length === 0) return;
+
+    sectionObserver = new IntersectionObserver((entries) => {
+        const visible = entries
+            .filter((entry) => entry.isIntersecting)
+            .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+
+        if (visible.length > 0) {
+            const id = visible[0].target.id;
+            persistSection(id);
+            
+            // Update URL when section becomes visible from scrolling (not from click)
+            const url = new URL(window.location.href);
+            if (url.searchParams.get('section') !== id) {
+                url.searchParams.set('section', id);
+                window.history.replaceState({}, '', url);
+            }
+        }
+    }, { threshold: [0.45, 0.7] });
+
+    observed.forEach((el) => sectionObserver.observe(el));
+}
+
+function handleUploadClick() {
+    const currentUser = window.Auth ? window.Auth.getSessionUser() : null;
+    if (currentUser) {
+        window.location.href = 'upload/?section=upload';
+    } else {
+        sessionStorage.setItem('redirectAfterLogin', 'upload/?section=upload');
+        window.location.href = 'login/';
+    }
+}
+
 // Initialize Map
 let map;
 let trafficMarkers = [];
@@ -169,7 +208,7 @@ let trafficDates = [];
 let selectedTrafficDate = null;
 const trafficPopupCharts = {};
 let pulseMarkers = [];
-const PULSE_RADIUS_DIVISOR = 48;
+const PULSE_RADIUS_DIVISOR = 57;
 
 function setTrafficMapStatus(message, isError = false) {
     const status = document.getElementById('trafficMapStatus');
@@ -496,7 +535,7 @@ function initMap() {
         maxBounds: chicagoBounds,
         maxBoundsViscosity: 1.0
     }).setView([41.8781, -87.6298], 12);
-
+    
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
         subdomains: 'abcd',

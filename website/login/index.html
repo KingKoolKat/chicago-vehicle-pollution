@@ -19,19 +19,19 @@
 
             <div class="grid grid-cols-2 gap-2 mb-6">
                 <button id="showLoginBtn" type="button" class="py-2 rounded-lg bg-green-500/20 border border-green-500/50 text-sm font-semibold">Login</button>
-                <button id="showSignupBtn" type="button" class="py-2 rounded-lg bg-gray-800/70 border border-gray-600 text-sm font-semibold">Sign Up</button>
+                <button id="showSignupBtn" type="button" class="py-2 rounded-lg bg-gray-500/70 border border-gray-600 text-sm font-semibold">Sign Up</button>
             </div>
 
             <form id="loginForm" class="space-y-4">
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1" for="loginEmail">Email</label>
+                    <label class="block text-sm text-gray-500 mb-1" for="loginEmail">Email</label>
                     <input id="loginEmail" name="email" type="email" required
-                        class="w-full rounded-lg bg-gray-800 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                        class="w-full rounded-lg bg-gray-200 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
                 </div>
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1" for="loginPassword">Password</label>
+                    <label class="block text-sm text-gray-500 mb-1" for="loginPassword">Password</label>
                     <input id="loginPassword" name="password" type="password" required
-                        class="w-full rounded-lg bg-gray-800 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                        class="w-full rounded-lg bg-gray-200 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
                 </div>
                 <button type="submit" class="w-full py-3 rounded-lg bg-gradient-to-r from-green-500 to-blue-600 font-semibold hover:shadow-lg transition-all">
                     <i class="fas fa-right-to-bracket mr-2"></i>Login
@@ -40,26 +40,26 @@
 
             <form id="signupForm" class="space-y-4 hidden">
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1" for="signupName">Full Name</label>
+                    <label class="block text-sm text-gray-500 mb-1" for="signupName">Full Name</label>
                     <input id="signupName" name="name" type="text" required
-                        class="w-full rounded-lg bg-gray-800 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                        class="w-full rounded-lg bg-gray-200 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
                 </div>
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1" for="signupEmail">Email</label>
+                    <label class="block text-sm text-gray-500 mb-1" for="signupEmail">Email</label>
                     <input id="signupEmail" name="email" type="email" required
-                        class="w-full rounded-lg bg-gray-800 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                        class="w-full rounded-lg bg-gray-200 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
                 </div>
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1" for="signupPassword">Password</label>
+                    <label class="block text-sm text-gray-500 mb-1" for="signupPassword">Password</label>
                     <input id="signupPassword" name="password" type="password" minlength="8" required
-                        class="w-full rounded-lg bg-gray-800 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                        class="w-full rounded-lg bg-gray-200 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
                 </div>
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1" for="signupPasswordConfirm">Confirm Password</label>
+                    <label class="block text-sm text-gray-500 mb-1" for="signupPasswordConfirm">Confirm Password</label>
                     <input id="signupPasswordConfirm" name="passwordConfirm" type="password" minlength="8" required
-                        class="w-full rounded-lg bg-gray-800 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
+                        class="w-full rounded-lg bg-gray-200 border border-gray-600 px-4 py-3 focus:outline-none focus:border-green-400">
                 </div>
-                <button type="submit" class="w-full py-3 rounded-lg bg-gradient-to-r from-blue-500 to-green-600 font-semibold hover:shadow-lg transition-all">
+                <button type="submit" class="w-full py-3 rounded-lg bg-gradient-to-r from-yellow-200 to-purple-200 font-semibold hover:shadow-lg transition-all">
                     <i class="fas fa-user-plus mr-2"></i>Create Account
                 </button>
             </form>
@@ -99,10 +99,10 @@
             document.getElementById("signupForm").classList.toggle("hidden", isLogin);
             document.getElementById("showLoginBtn").className = isLogin
                 ? "py-2 rounded-lg bg-green-500/20 border border-green-500/50 text-sm font-semibold"
-                : "py-2 rounded-lg bg-gray-800/70 border border-gray-600 text-sm font-semibold";
+                : "py-2 rounded-lg bg-gray-500/70 border border-gray-600 text-sm font-semibold";
             document.getElementById("showSignupBtn").className = !isLogin
                 ? "py-2 rounded-lg bg-green-500/20 border border-green-500/50 text-sm font-semibold"
-                : "py-2 rounded-lg bg-gray-800/70 border border-gray-600 text-sm font-semibold";
+                : "py-2 rounded-lg bg-gray-500/70 border border-gray-600 text-sm font-semibold";
         }
 
         if (window.Auth && window.Auth.getSessionUser()) {
