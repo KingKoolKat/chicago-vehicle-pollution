@@ -170,7 +170,3 @@ curl "https://<your-modal-endpoint>/traffic_map?date=2026-02-28"
 - Keep endpoint contracts stable; the frontend relies on response key names.
 - Prefer adding new operations to consolidated endpoints (`/auth`, `/report_ops`) when it keeps UX simpler.
 - When changing Snowflake table shape, update both query logic and frontend assumptions.
-
-## License
-
-No license file is currently included. Add a `LICENSE` file before public/open-source distribution.
